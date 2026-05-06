@@ -9,7 +9,7 @@
 //
 // 실패 시: improvement_notes에 기록 + event_threads.sync_state='error'.
 
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/client';
 import {
   eventThreads,
@@ -185,33 +185,42 @@ export async function resyncFailedThreads(): Promise<ResyncResult> {
     .from(eventThreads)
     .where(sql`${eventThreads.syncState} in ('pending', 'error')`);
 
+  if (pending.length === 0) {
+    return { attempted: 0, synced: 0, failed: 0, thread_ids: [] };
+  }
+
   let synced = 0;
   let failed = 0;
   for (const { id } of pending) {
     await syncThreadToCalendar(id);
-    const [after] = await db
+    const [row] = await db
       .select({ syncState: eventThreads.syncState })
       .from(eventThreads)
       .where(eq(eventThreads.id, id))
       .limit(1);
-    if (after?.syncState === 'synced') synced += 1;
+    if (row?.syncState === 'synced') synced += 1;
     else failed += 1;
   }
 
-  const after = await db
+  const finalStates = await db
     .select({
       thread_id: eventThreads.id,
       google_event_id: eventThreads.googleEventId,
       sync_state: eventThreads.syncState,
     })
     .from(eventThreads)
-    .where(sql`${eventThreads.id} = ANY(${pending.map((p) => p.id)})`);
+    .where(
+      inArray(
+        eventThreads.id,
+        pending.map((p) => p.id),
+      ),
+    );
 
   return {
     attempted: pending.length,
     synced,
     failed,
-    thread_ids: after,
+    thread_ids: finalStates,
   };
 }
 
