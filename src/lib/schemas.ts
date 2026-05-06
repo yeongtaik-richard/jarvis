@@ -76,6 +76,7 @@ export const SearchQuery = z.object({
   on_month_day: monthDay.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   include_history: queryBool.default(false),
+  include_deleted: queryBool.default(false),
 });
 export type SearchQuery = z.infer<typeof SearchQuery>;
 

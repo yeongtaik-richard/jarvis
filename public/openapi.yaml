@@ -278,7 +278,19 @@ paths:
           description: 'MM-DD 형식. 매년 반복되는 사건 검색 (예: 09-28).'
           schema: { type: string, pattern: '^(0?[1-9]|1[0-2])-(0?[1-9]|[12]\d|3[01])$' }
         - { name: limit,      in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
-        - { name: include_history, in: query, schema: { type: boolean, default: false } }
+        - name: include_history
+          in: query
+          description: |
+            true면 supersede된 옛 version도 포함 (계획 → 실제 → 취소 같은 thread 안의 변천사를 모두 보여줌).
+            회상/요약 질의에는 보통 true로 호출해 plan과 actual을 둘 다 끌어올 것.
+          schema: { type: boolean, default: false }
+        - name: include_deleted
+          in: query
+          description: |
+            기본은 false — 사용자가 명시적으로 "지워/삭제"라고 했던 thread는 모두 결과에서 제외된다.
+            "내가 지웠던 거 뭐였지?" 같이 사용자가 명시적으로 삭제 이력을 묻는 경우에만 true로 호출.
+            status='cancelled' 같은 계획 변경은 이 필터와 무관 (include_history=true로 보임).
+          schema: { type: boolean, default: false }
       responses:
         '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResult' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }

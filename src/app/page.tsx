@@ -14,6 +14,7 @@ type Search = {
   tag?: string;
   on_month_day?: string;
   include_history?: string;
+  include_deleted?: string;
 };
 
 export default async function HomePage({
@@ -76,6 +77,11 @@ function FilterBar({ values }: { values: Search }) {
         label="History"
         name="include_history"
         defaultChecked={values.include_history === 'true'}
+      />
+      <CheckboxField
+        label="Deleted"
+        name="include_deleted"
+        defaultChecked={values.include_deleted === 'true'}
       />
       <button
         type="submit"

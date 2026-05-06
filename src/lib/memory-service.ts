@@ -203,7 +203,15 @@ export async function search(query: SearchQuery): Promise<EventVersion[]> {
 
   if (!query.include_history) {
     filters.push(sql`${eventVersions.isCanonical} = true`);
-    filters.push(sql`${eventVersions.deletedAt} is null`);
+  }
+  if (!query.include_deleted) {
+    // 명시적 삭제(tombstone)가 있는 thread 전체를 제외.
+    // status='cancelled' 같은 계획 변경은 영향 없음.
+    filters.push(
+      sql`${eventVersions.threadId} not in (
+        select thread_id from event_versions where deleted_at is not null
+      )`,
+    );
   }
   if (query.q) {
     filters.push(
