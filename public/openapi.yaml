@@ -1,0 +1,432 @@
+openapi: 3.1.0
+info:
+  title: Jarvis Memory API
+  description: |
+    개인 비서 Jarvis가 메모리(메모/일정/사실/관계/트리거)를 저장·검색·갱신·삭제하기 위한 API.
+    저장은 append-only 모델이다. 모든 변경은 새 version을 만들어 thread를 이어간다.
+    동일한 사실의 변화(예: 미팅 시간 변경)는 PATCH로 supersede되며, 이전 버전은 보존된다.
+
+    분류 (kind):
+    - event: 시점이 있는 사건/계획. status는 planned/actual/cancelled 중 하나.
+    - fact: 정적 사실(예: 와이프 생일은 X). status=active.
+    - relationship: 사람·대상 관계 정보(예: 와이프=한윤정). status=active.
+    - trigger: 특정 시점이 오면 상기시켜야 할 메모(예: 준수 생일에 X 사기). status=active/resolved.
+
+    시간:
+    - start_time: 사건 시작/계획 시각 (모든 시점 메모의 기본)
+    - end_time: 사건 종료 시각 (기간 이벤트)
+    - actual_time: 실제로 발생한 시각 (계획 vs 실제 구분에 사용)
+    - 모두 ISO 8601, 오프셋 필수.
+
+    attributes(jsonb): 자유 형식 메타데이터. 예: { "recur_yearly": true, "hotel": "...", "birthday": "1981-08-03" }.
+  version: '1.1.0'
+servers:
+  - url: https://jarvis.example.vercel.app
+    description: Production (Vercel 배포 후 본인 도메인으로 교체)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    Memory:
+      type: object
+      description: 저장된 메모리의 한 version. is_canonical=true 이면 현재 유효한 버전.
+      required:
+        - id
+        - thread_id
+        - is_canonical
+        - op
+        - kind
+        - status
+        - title
+        - importance
+        - tags
+        - source
+        - time_precision
+        - created_at
+        - attributes
+      properties:
+        id:           { type: string, format: uuid }
+        thread_id:    { type: string, format: uuid }
+        supersedes_id: { type: [string, 'null'], format: uuid }
+        is_canonical: { type: boolean }
+        op:           { type: string, enum: [create, update, delete] }
+        kind:         { type: string, enum: [event, fact, relationship, trigger] }
+        status:       { type: string, enum: [planned, actual, cancelled, active, resolved, na] }
+        title:        { type: string }
+        body:         { type: [string, 'null'] }
+        start_time:   { type: [string, 'null'], format: date-time, description: 사건 시작/계획 시각 }
+        end_time:     { type: [string, 'null'], format: date-time, description: 사건 종료 시각 (기간 이벤트) }
+        actual_time:  { type: [string, 'null'], format: date-time, description: 실제 발생 시각 }
+        timezone:     { type: [string, 'null'], description: 사용자 의도의 타임존 (예 Asia/Seoul) }
+        time_precision: { type: string, enum: [exact, date, month, unknown] }
+        raw_time_text: { type: [string, 'null'] }
+        importance:   { type: integer, enum: [0, 1, 2] }
+        tags:         { type: array, items: { type: string } }
+        attributes:   { type: object, description: 자유 형식 메타데이터(jsonb) }
+        source:       { type: string, enum: [gpt, web, sync] }
+        created_at:   { type: string, format: date-time }
+        deleted_at:   { type: [string, 'null'], format: date-time }
+
+    MemoryWithHistory:
+      allOf:
+        - $ref: '#/components/schemas/Memory'
+        - type: object
+          properties:
+            history:
+              type: array
+              items: { $ref: '#/components/schemas/Memory' }
+
+    CreateMemoryInput:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: 사용자가 기억해 달라고 한 핵심 한 줄.
+        body:
+          type: [string, 'null']
+          maxLength: 8000
+        kind:
+          type: string
+          enum: [event, fact, relationship, trigger]
+          default: event
+          description: |
+            event: 시점이 있는 사건/계획.
+            fact: 정적 사실(생년월일 등 변하지 않는 정보).
+            relationship: 사람·대상 관계 (가족/지인 등록).
+            trigger: 특정 시점에 상기해야 할 메모.
+        status:
+          type: string
+          enum: [planned, actual, cancelled, active, resolved, na]
+          default: na
+          description: |
+            event는 planned/actual/cancelled 중 하나.
+            fact·relationship은 active.
+            trigger는 active(대기) 또는 resolved(완료).
+            나머지는 na.
+        start_time:
+          type: [string, 'null']
+          format: date-time
+          description: ISO 8601, 오프셋 필수. 시점 미정이면 null.
+        end_time:
+          type: [string, 'null']
+          format: date-time
+          description: 기간 이벤트의 종료 시각. 점 이벤트면 null.
+        actual_time:
+          type: [string, 'null']
+          format: date-time
+          description: 실제 발생 시각. 계획만 있을 때는 null.
+        timezone:
+          type: [string, 'null']
+          description: 한국 사용자면 보통 Asia/Seoul.
+        time_precision:
+          type: string
+          enum: [exact, date, month, unknown]
+          default: exact
+        raw_time_text:
+          type: [string, 'null']
+          description: 사용자가 시간을 말한 원문.
+        importance:
+          type: integer
+          enum: [0, 1, 2]
+          default: 0
+        tags:
+          type: array
+          items: { type: string, minLength: 1, maxLength: 60 }
+          maxItems: 20
+          default: []
+          description: |
+            표준 prefix 사용 권장:
+            - family:wife, family:son:준수, family:son:준서
+            - self
+            - place:목포, trip:목포-2026-05
+            - recur:birthday:준수, gift
+        attributes:
+          type: object
+          default: {}
+          description: |
+            자유 형식 메타데이터(jsonb). 권장 키:
+            - recur_yearly: boolean — 연간 반복 트리거 여부
+            - birthday: "YYYY-MM-DD" — fact/relationship의 생년월일
+            - hotel/place 등 도메인 정보
+        source:
+          type: string
+          enum: [gpt, web, sync]
+          default: gpt
+        supersedes_id:
+          type: [string, 'null']
+          format: uuid
+          description: 기존 메모리를 갱신할 때 그 version_id. 새 메모면 생략.
+
+    PatchMemoryInput:
+      description: 기존 메모리를 갱신(supersede). URL의 id가 supersedes_id로 사용된다.
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 500 }
+        body: { type: [string, 'null'], maxLength: 8000 }
+        kind: { type: string, enum: [event, fact, relationship, trigger], default: event }
+        status: { type: string, enum: [planned, actual, cancelled, active, resolved, na], default: na }
+        start_time: { type: [string, 'null'], format: date-time }
+        end_time: { type: [string, 'null'], format: date-time }
+        actual_time: { type: [string, 'null'], format: date-time }
+        timezone: { type: [string, 'null'] }
+        time_precision: { type: string, enum: [exact, date, month, unknown], default: exact }
+        raw_time_text: { type: [string, 'null'] }
+        importance: { type: integer, enum: [0, 1, 2], default: 0 }
+        tags: { type: array, items: { type: string }, default: [] }
+        attributes: { type: object, default: {} }
+        source: { type: string, enum: [gpt, web, sync], default: gpt }
+
+    SearchResult:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Memory' } }
+        count: { type: integer }
+
+    Improvement:
+      type: object
+      description: 백엔드 한계나 부족한 기능을 자비스가 기록한 노트.
+      required: [id, observed_request, missing_capability, priority, status, created_at]
+      properties:
+        id:                 { type: string, format: uuid }
+        observed_request:   { type: string, description: 사용자가 무엇을 요청·기대했는지 }
+        missing_capability: { type: string, description: 백엔드/스키마/API에서 무엇이 부족한지 }
+        proposed_fix:       { type: [string, 'null'], description: 어떻게 고치면 될지 자비스 제안 }
+        priority:           { type: integer, minimum: 0, maximum: 3 }
+        status:             { type: string, enum: [open, triaged, applied, wontfix] }
+        example_memory_id:  { type: [string, 'null'], format: uuid }
+        created_at:         { type: string, format: date-time }
+        resolved_at:        { type: [string, 'null'], format: date-time }
+        resolution_note:    { type: [string, 'null'] }
+
+    CreateImprovementInput:
+      type: object
+      required: [observed_request, missing_capability]
+      properties:
+        observed_request:   { type: string, minLength: 1, maxLength: 2000 }
+        missing_capability: { type: string, minLength: 1, maxLength: 2000 }
+        proposed_fix:       { type: [string, 'null'], maxLength: 4000 }
+        priority:           { type: integer, minimum: 0, maximum: 3, default: 0 }
+        example_memory_id:  { type: [string, 'null'], format: uuid }
+
+    PatchImprovementInput:
+      type: object
+      properties:
+        status: { type: string, enum: [open, triaged, applied, wontfix] }
+        priority: { type: integer, minimum: 0, maximum: 3 }
+        proposed_fix: { type: [string, 'null'], maxLength: 4000 }
+        resolution_note: { type: [string, 'null'], maxLength: 4000 }
+
+    ImprovementList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Improvement' } }
+        count: { type: integer }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        detail: { description: 추가 정보 (검증 오류 등). 형태는 다양함. }
+
+  responses:
+    BadRequest:
+      description: 잘못된 입력
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: 인증 실패
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: 존재하지 않는 리소스
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: 이미 supersede되었거나 canonical이 아닌 항목 등 충돌 상태
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/memory:
+    get:
+      operationId: searchMemory
+      x-openai-isConsequential: false
+      summary: 메모리 검색·목록
+      description: |
+        키워드, 기간, 태그, kind/status, 월-일로 메모리를 검색한다.
+        기본은 현재 유효한(is_canonical=true, deleted=false) 항목만 반환.
+        정렬: (시간 보유 그룹 위) → 중요도 → coalesce(actual_time, start_time, created_at) 역순.
+      parameters:
+        - { name: q,          in: query, schema: { type: string, maxLength: 200 } }
+        - { name: from,       in: query, schema: { type: string, format: date-time } }
+        - { name: to,         in: query, schema: { type: string, format: date-time } }
+        - { name: tag,        in: query, schema: { type: string } }
+        - { name: kind,       in: query, schema: { type: string, enum: [event, fact, relationship, trigger] } }
+        - { name: status,     in: query, schema: { type: string, enum: [planned, actual, cancelled, active, resolved, na] } }
+        - name: on_month_day
+          in: query
+          description: 'MM-DD 형식. 매년 반복되는 사건 검색 (예: 09-28).'
+          schema: { type: string, pattern: '^(0?[1-9]|1[0-2])-(0?[1-9]|[12]\d|3[01])$' }
+        - { name: limit,      in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: include_history, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      operationId: createMemory
+      x-openai-isConsequential: false
+      summary: 새 메모리 저장 또는 supersede
+      description: |
+        사용자가 기억해 달라고 한 내용을 저장한다.
+        kind를 정확히 분류해라:
+        - 시간이 있는 사건·계획 → kind=event, status=planned (미래) 또는 actual (이미 발생)
+        - 본인·가족 생년월일·이름 등 정적 사실 → kind=fact, status=active
+        - 사람·대상 관계(와이프=한윤정 등) → kind=relationship, status=active
+        - "X 시점에 Y 상기" 같은 트리거 → kind=trigger, status=active.
+          매년 반복이면 attributes.recur_yearly=true.
+
+        시점이 모호하면 추정하지 말고 사용자에게 재질문하거나, 정말 알 수 없으면
+        start_time=null + time_precision=unknown.
+        기존 메모를 갱신하는 의도면 supersedes_id에 그 version의 id를 넣어라
+        (계획 → 실제 변환은 같은 thread에 supersede + status=actual + actual_time 채우기).
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateMemoryInput' } } }
+      responses:
+        '201': { description: 생성된 version, content: { application/json: { schema: { $ref: '#/components/schemas/Memory' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/memory/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+
+    get:
+      operationId: getMemory
+      x-openai-isConsequential: false
+      summary: 단건 조회 (선택적 thread 이력 포함)
+      parameters:
+        - { name: include_history, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Memory'
+                  - $ref: '#/components/schemas/MemoryWithHistory'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+    patch:
+      operationId: supersedeMemory
+      x-openai-isConsequential: false
+      summary: 기존 메모리를 새 버전으로 갱신
+      description: |
+        URL의 id를 supersedes_id로 삼아 새 version을 만든다.
+        이전 version은 is_canonical=false로 보존된다 (이력 추적 가능).
+        호출 전 반드시 searchMemory로 대상 version_id를 확보할 것.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PatchMemoryInput' } } }
+      responses:
+        '201': { description: 새 canonical version, content: { application/json: { schema: { $ref: '#/components/schemas/Memory' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+    delete:
+      operationId: deleteMemory
+      x-openai-isConsequential: true
+      summary: 메모리 soft delete (tombstone 추가)
+      description: |
+        사용자가 명시적으로 "지워" "삭제" "잊어버려"라고 한 경우에만 호출.
+        모호한 표현은 supersede(상태 변경)로 처리할 것.
+      responses:
+        '200': { description: tombstone version, content: { application/json: { schema: { $ref: '#/components/schemas/Memory' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/triggers/due:
+    get:
+      operationId: listTriggersDue
+      x-openai-isConsequential: false
+      summary: 오늘(혹은 지정일) 상기시켜야 할 트리거 목록
+      description: |
+        kind=trigger AND status=active 중에서, attributes.recur_yearly=true면 month-day 매칭,
+        아니면 start_time::date 정확 매칭.
+        대화 시작 시 또는 "오늘 일정" 류 질의 시 함께 호출해 컨텍스트로 활용.
+      parameters:
+        - { name: date, in: query, description: 'YYYY-MM-DD. 미지정 시 오늘.', schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/improvement:
+    post:
+      operationId: logImprovement
+      x-openai-isConsequential: false
+      summary: 자비스가 발견한 백엔드 한계 기록
+      description: |
+        다음 같은 케이스에서 호출:
+        - 사용자 요청을 현재 스키마/API로 정확히 표현하지 못함
+        - 검색 결과가 자주 빗나감
+        - 새 분류·필드가 필요해 보임
+        observed_request에 사용자가 뭘 말했는지, missing_capability에 뭐가 막혔는지,
+        proposed_fix에 어떻게 고치면 될지 자유 서술.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateImprovementInput' } } }
+      responses:
+        '201': { description: 생성된 노트, content: { application/json: { schema: { $ref: '#/components/schemas/Improvement' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      operationId: listImprovements
+      x-openai-isConsequential: false
+      summary: 개선 노트 목록
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [open, triaged, applied, wontfix] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/ImprovementList' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/improvement/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getImprovement
+      x-openai-isConsequential: false
+      summary: 개선 노트 단건
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Improvement' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: updateImprovement
+      x-openai-isConsequential: false
+      summary: 개선 노트 상태/내용 갱신 (운영자 검토 워크플로)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PatchImprovementInput' } } }
+      responses:
+        '200': { description: 갱신된 노트, content: { application/json: { schema: { $ref: '#/components/schemas/Improvement' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
