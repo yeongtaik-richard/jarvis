@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "db:migrate": "dotenv -e .env.local -- tsx src/db/migrate.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "google:auth": "dotenv -e .env.local -- tsx scripts/google-auth.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
