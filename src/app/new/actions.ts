@@ -1,8 +1,10 @@
 'use server';
 
+import { after } from 'next/server';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { createOrSupersede } from '@/lib/memory-service';
+import { syncThreadToCalendar } from '@/lib/calendar-sync';
 import { CreateMemoryInput } from '@/lib/schemas';
 import { localInputToIso, parseAttributes, parseTags } from '@/lib/form-parsing';
 
@@ -26,6 +28,7 @@ export async function createMemoryAction(formData: FormData) {
   };
   const parsed = CreateMemoryInput.parse(raw);
   const created = await createOrSupersede(parsed);
+  after(() => syncThreadToCalendar(created.threadId));
   revalidatePath('/');
   redirect(`/m/${created.id}`);
 }

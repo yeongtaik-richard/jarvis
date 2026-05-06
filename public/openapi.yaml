@@ -377,6 +377,63 @@ paths:
         '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResult' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /api/calendar/resync:
+    get:
+      operationId: listCalendarSyncFailures
+      x-openai-isConsequential: false
+      summary: 캘린더 동기화 실패한 thread 목록
+      description: |
+        sync_state가 pending 또는 error인 event_thread를 모두 반환.
+        실패 사유는 동시에 /api/improvement(category=sync_failure)에 기록되어 있음.
+      responses:
+        '200':
+          description: 결과 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        thread_id: { type: string, format: uuid }
+                        sync_state: { type: string }
+                        google_event_id: { type: [string, 'null'] }
+                        last_synced_at: { type: [string, 'null'], format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: resyncCalendar
+      x-openai-isConsequential: true
+      summary: 캘린더 동기화 실패한 thread 모두 재시도
+      description: |
+        sync_state in (pending, error)인 모든 thread를 한 번에 재동기화.
+        성공한 thread는 sync_state=synced로 업데이트.
+        사용자가 명시적으로 "캘린더 동기화 다시 해줘" 등의 요청을 했을 때만 호출할 것.
+      responses:
+        '200':
+          description: 재동기화 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attempted, synced, failed, thread_ids]
+                properties:
+                  attempted: { type: integer }
+                  synced: { type: integer }
+                  failed: { type: integer }
+                  thread_ids:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        thread_id: { type: string, format: uuid }
+                        sync_state: { type: string }
+                        google_event_id: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /api/improvement:
     post:
       operationId: logImprovement

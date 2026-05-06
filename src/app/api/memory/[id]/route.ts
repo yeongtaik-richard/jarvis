@@ -1,4 +1,4 @@
-import type { NextRequest } from 'next/server';
+import { after, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { checkBearer } from '@/lib/auth';
 import { HttpError } from '@/lib/errors';
@@ -10,6 +10,7 @@ import {
   softDelete,
   toApiMemory,
 } from '@/lib/memory-service';
+import { syncThreadToCalendar } from '@/lib/calendar-sync';
 import { PatchMemoryInput } from '@/lib/schemas';
 
 export const runtime = 'nodejs';
@@ -59,6 +60,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
   try {
     const created = await createOrSupersede({ ...parsed.data, supersedes_id: id });
+    after(() => syncThreadToCalendar(created.threadId));
     return ok(toApiMemory(created), 201);
   } catch (e) {
     if (e instanceof HttpError) return jsonError(e.status, e.code, e.detail);
@@ -76,6 +78,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
 
   try {
     const tombstone = await softDelete(id);
+    after(() => syncThreadToCalendar(tombstone.threadId));
     return ok(toApiMemory(tombstone), 200);
   } catch (e) {
     if (e instanceof HttpError) return jsonError(e.status, e.code, e.detail);
