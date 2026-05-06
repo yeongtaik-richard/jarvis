@@ -26,11 +26,9 @@ create index if not exists ix_versions_start_time    on event_versions(start_tim
 create index if not exists ix_versions_actual_time   on event_versions(actual_time desc nulls last);
 create index if not exists ix_versions_attributes    on event_versions using gin(attributes);
 
--- month-day 매칭(연간 반복 트리거) 보조 인덱스. start_time이 있을 때만 인덱싱.
-create index if not exists ix_versions_start_md on event_versions(
-  ((extract(month from start_time))::int),
-  ((extract(day   from start_time))::int)
-) where start_time is not null;
+-- (월-일 매칭 인덱스는 timestamptz IMMUTABLE 제약 때문에 보류.
+--  데이터량이 작은 동안은 sequential scan으로 충분. 필요해지면 나중에
+--  date 형 보조 컬럼 + IMMUTABLE 표현식 인덱스 추가.)
 
 create table if not exists improvement_notes (
   id                   uuid primary key default gen_random_uuid(),

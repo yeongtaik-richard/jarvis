@@ -265,11 +265,31 @@ export async function search(query: SearchQuery): Promise<EventVersion[]> {
 // kind='trigger', status='active' (and not deleted/canonical) 중,
 // attributes.recur_yearly === true → start_time의 month-day 매칭
 // 그 외 → start_time::date 정확 매칭
+//
+// 모든 비교는 row의 timezone 칼럼(없으면 DEFAULT_TZ)을 기준으로 한다.
+// 한국 사용자가 KST 자정에 등록한 9-28을 9-28로 매칭하기 위함.
+const DEFAULT_TZ = 'Asia/Seoul';
+
+function calendarPartsIn(date: Date, timeZone: string) {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
+  return {
+    isoDate: `${parts.year}-${parts.month}-${parts.day}`,
+    month: parseInt(parts.month, 10),
+    day: parseInt(parts.day, 10),
+  };
+}
+
 export async function getTriggersDue(query: TriggersDueQuery): Promise<EventVersion[]> {
   const target = query.date ?? new Date();
-  const month = target.getUTCMonth() + 1;
-  const day = target.getUTCDate();
-  const isoDate = target.toISOString().slice(0, 10); // YYYY-MM-DD
+  const { isoDate, month, day } = calendarPartsIn(target, DEFAULT_TZ);
+  const tz = sql`coalesce(${eventVersions.timezone}, ${DEFAULT_TZ})`;
+  const localStart = sql`(${eventVersions.startTime} at time zone ${tz})`;
 
   return db
     .select()
@@ -282,11 +302,11 @@ export async function getTriggersDue(query: TriggersDueQuery): Promise<EventVers
           and ${eventVersions.startTime} is not null
           and (
             (${eventVersions.attributes} ->> 'recur_yearly' = 'true'
-              and extract(month from ${eventVersions.startTime})::int = ${month}
-              and extract(day   from ${eventVersions.startTime})::int = ${day})
+              and extract(month from ${localStart})::int = ${month}
+              and extract(day   from ${localStart})::int = ${day})
             or
             (coalesce(${eventVersions.attributes} ->> 'recur_yearly', 'false') <> 'true'
-              and ${eventVersions.startTime}::date = ${isoDate}::date)
+              and ${localStart}::date = ${isoDate}::date)
           )`,
     )
     .orderBy(desc(eventVersions.importance), desc(eventVersions.createdAt))

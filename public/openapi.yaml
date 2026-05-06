@@ -21,8 +21,8 @@ info:
     attributes(jsonb): 자유 형식 메타데이터. 예: { "recur_yearly": true, "hotel": "...", "birthday": "1981-08-03" }.
   version: '1.1.0'
 servers:
-  - url: https://jarvis.example.vercel.app
-    description: Production (Vercel 배포 후 본인 도메인으로 교체)
+  - url: https://jarvis-hazel-eta.vercel.app
+    description: Production
 
 components:
   securitySchemes:
