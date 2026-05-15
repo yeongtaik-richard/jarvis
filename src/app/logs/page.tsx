@@ -3,6 +3,7 @@ import { and, desc, eq, gte, lte, like, sql } from 'drizzle-orm';
 import { Header } from '@/app/components/Header';
 import { db } from '@/db/client';
 import { requestLogs, type RequestLog } from '@/db/schema';
+import { PruneButton } from './PruneButton';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -80,8 +81,11 @@ export default async function LogsPage({
           <Stat label="평균 (ms)" value={s.avgMs.toString()} />
           <Stat label="p95 (ms)" value={s.p95Ms.toString()} />
         </div>
-        <div className="text-sm text-zinc-500">
-          {rows.length}건 표시 (최대 {limit})
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-zinc-500">
+            {rows.length}건 표시 (최대 {limit})
+          </div>
+          <PruneButton />
         </div>
         <LogTable rows={rows} />
       </main>
