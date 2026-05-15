@@ -64,7 +64,7 @@ components:
         timezone:     { type: [string, 'null'], description: 사용자 의도의 타임존 (예 Asia/Seoul) }
         time_precision: { type: string, enum: [exact, date, month, unknown] }
         raw_time_text: { type: [string, 'null'] }
-        importance:   { type: integer, enum: [0, 1, 2] }
+        importance:   { type: integer, enum: [0, 1, 2], description: "0=normal, 1=important(★), 2=pin(📌). 최댓값 2." }
         tags:         { type: array, items: { type: string } }
         attributes:   { type: object, description: 자유 형식 메타데이터(jsonb) }
         source:       { type: string, enum: [gpt, web, sync] }
@@ -136,6 +136,9 @@ components:
           type: integer
           enum: [0, 1, 2]
           default: 0
+          description: |
+            중요도 단계. 0=보통(기본), 1=important(★), 2=pin(📌, 최상위 고정).
+            상한은 2. 3 이상을 보내면 400 invalid_input.
         tags:
           type: array
           items: { type: string, minLength: 1, maxLength: 60 }
@@ -179,7 +182,7 @@ components:
         timezone: { type: [string, 'null'] }
         time_precision: { type: string, enum: [exact, date, month, unknown], default: exact }
         raw_time_text: { type: [string, 'null'] }
-        importance: { type: integer, enum: [0, 1, 2], default: 0 }
+        importance: { type: integer, enum: [0, 1, 2], default: 0, description: "0=normal, 1=important(★), 2=pin(📌). 상한 2." }
         tags: { type: array, items: { type: string }, default: [] }
         attributes: { type: object, default: {} }
         source: { type: string, enum: [gpt, web, sync], default: gpt }
