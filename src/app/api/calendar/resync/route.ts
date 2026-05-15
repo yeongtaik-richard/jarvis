@@ -2,13 +2,14 @@ import type { NextRequest } from 'next/server';
 import { checkBearer } from '@/lib/auth';
 import { jsonError, ok } from '@/lib/http';
 import { listFailedThreads, resyncFailedThreads } from '@/lib/calendar-sync';
+import { withLog } from '@/lib/request-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 // 동기화는 모든 실패 thread를 차례로 재시도하므로 길게 걸릴 수 있음.
 export const maxDuration = 60;
 
-export async function GET(req: NextRequest) {
+export const GET = withLog(async (req: NextRequest) => {
   const authError = checkBearer(req);
   if (authError) return authError;
   try {
@@ -26,9 +27,9 @@ export async function GET(req: NextRequest) {
     console.error(e);
     return jsonError(500, 'internal_error');
   }
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withLog(async (req: NextRequest) => {
   const authError = checkBearer(req);
   if (authError) return authError;
   try {
@@ -38,4 +39,4 @@ export async function POST(req: NextRequest) {
     console.error(e);
     return jsonError(500, 'internal_error');
   }
-}
+});

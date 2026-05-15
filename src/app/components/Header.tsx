@@ -18,6 +18,9 @@ export function Header() {
           <Link href="/improvement" className="hover:text-zinc-900 dark:hover:text-zinc-100">
             Improvements
           </Link>
+          <Link href="/logs" className="hover:text-zinc-900 dark:hover:text-zinc-100">
+            Server Logs
+          </Link>
         </nav>
         <form action={logoutAction} className="ml-auto">
           <button type="submit" className="text-sm text-zinc-500 hover:text-zinc-800">

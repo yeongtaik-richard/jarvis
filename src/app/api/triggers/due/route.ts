@@ -2,12 +2,13 @@ import type { NextRequest } from 'next/server';
 import { checkBearer } from '@/lib/auth';
 import { fromZod, jsonError, ok } from '@/lib/http';
 import { getTriggersDue, toApiMemory } from '@/lib/memory-service';
+import { withLog } from '@/lib/request-log';
 import { TriggersDueQuery } from '@/lib/schemas';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+export const GET = withLog(async (req: NextRequest) => {
   const authError = checkBearer(req);
   if (authError) return authError;
 
@@ -22,4 +23,4 @@ export async function GET(req: NextRequest) {
     console.error(e);
     return jsonError(500, 'internal_error');
   }
-}
+});

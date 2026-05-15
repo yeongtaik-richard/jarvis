@@ -6,12 +6,13 @@ import {
   searchImprovements,
   toApiImprovement,
 } from '@/lib/improvement-service';
+import { withLog } from '@/lib/request-log';
 import { CreateImprovementInput, ImprovementSearchQuery } from '@/lib/schemas';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
+export const POST = withLog(async (req: NextRequest) => {
   const authError = checkBearer(req);
   if (authError) return authError;
 
@@ -32,9 +33,9 @@ export async function POST(req: NextRequest) {
     console.error(e);
     return jsonError(500, 'internal_error');
   }
-}
+});
 
-export async function GET(req: NextRequest) {
+export const GET = withLog(async (req: NextRequest) => {
   const authError = checkBearer(req);
   if (authError) return authError;
 
@@ -49,4 +50,4 @@ export async function GET(req: NextRequest) {
     console.error(e);
     return jsonError(500, 'internal_error');
   }
-}
+});

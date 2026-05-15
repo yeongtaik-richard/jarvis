@@ -6,6 +6,7 @@ import {
   timestamp,
   boolean,
   smallint,
+  integer,
   jsonb,
   index,
   uniqueIndex,
@@ -102,8 +103,30 @@ export const improvementNotes = pgTable(
   ],
 );
 
+export const requestLogs = pgTable(
+  'request_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ts: timestamp('ts', { withTimezone: true }).notNull().defaultNow(),
+    method: text('method').notNull(),
+    path: text('path').notNull(),
+    status: smallint('status').notNull(),
+    durationMs: integer('duration_ms').notNull(),
+    error: text('error'),
+    userAgent: text('user_agent'),
+    ip: text('ip'),
+  },
+  (t) => [
+    index('ix_request_logs_ts').on(sql`ts desc`),
+    index('ix_request_logs_status').on(t.status, sql`ts desc`),
+    index('ix_request_logs_path').on(t.path, sql`ts desc`),
+  ],
+);
+
 export type EventThread = typeof eventThreads.$inferSelect;
 export type EventVersion = typeof eventVersions.$inferSelect;
 export type NewEventVersion = typeof eventVersions.$inferInsert;
 export type ImprovementNote = typeof improvementNotes.$inferSelect;
 export type NewImprovementNote = typeof improvementNotes.$inferInsert;
+export type RequestLog = typeof requestLogs.$inferSelect;
+export type NewRequestLog = typeof requestLogs.$inferInsert;

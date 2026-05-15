@@ -11,6 +11,7 @@ import {
   toApiMemory,
 } from '@/lib/memory-service';
 import { syncThreadToCalendar } from '@/lib/calendar-sync';
+import { withLog } from '@/lib/request-log';
 import { PatchMemoryInput } from '@/lib/schemas';
 
 export const runtime = 'nodejs';
@@ -19,7 +20,7 @@ export const dynamic = 'force-dynamic';
 const idSchema = z.string().uuid();
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function GET(req: NextRequest, ctx: Ctx) {
+export const GET = withLog<Ctx>(async (req: NextRequest, ctx: Ctx) => {
   const authError = checkBearer(req);
   if (authError) return authError;
 
@@ -39,9 +40,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     console.error(e);
     return jsonError(500, 'internal_error');
   }
-}
+});
 
-export async function PATCH(req: NextRequest, ctx: Ctx) {
+export const PATCH = withLog<Ctx>(async (req: NextRequest, ctx: Ctx) => {
   const authError = checkBearer(req);
   if (authError) return authError;
 
@@ -67,9 +68,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     console.error(e);
     return jsonError(500, 'internal_error');
   }
-}
+});
 
-export async function DELETE(req: NextRequest, ctx: Ctx) {
+export const DELETE = withLog<Ctx>(async (req: NextRequest, ctx: Ctx) => {
   const authError = checkBearer(req);
   if (authError) return authError;
 
@@ -85,4 +86,4 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     console.error(e);
     return jsonError(500, 'internal_error');
   }
-}
+});
