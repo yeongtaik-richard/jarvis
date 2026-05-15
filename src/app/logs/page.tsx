@@ -14,6 +14,7 @@ type Search = {
   path?: string;
   since_hours?: string;
   limit?: string;
+  page?: string;
 };
 
 const DEFAULT_LIMIT = 200;
@@ -29,6 +30,8 @@ export default async function LogsPage({
 
   const sinceHours = clampInt(sp.since_hours, DEFAULT_SINCE_HOURS, 1, 24 * 30);
   const limit = clampInt(sp.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
+  const page = clampInt(sp.page, 1, 1, 1_000_000);
+  const offset = (page - 1) * limit;
   const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000);
 
   const conditions = [gte(requestLogs.ts, since)];
@@ -49,12 +52,23 @@ export default async function LogsPage({
     conditions.push(like(requestLogs.path, `%${sp.path}%`));
   }
 
+  const where = and(...conditions);
+
   const rows = await db
     .select()
     .from(requestLogs)
-    .where(and(...conditions))
+    .where(where)
     .orderBy(desc(requestLogs.ts))
-    .limit(limit);
+    .limit(limit)
+    .offset(offset);
+
+  const filteredCount = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(requestLogs)
+    .where(where)
+    .then((r) => r[0].n);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCount / limit));
 
   const summary = await db
     .select({
@@ -83,11 +97,15 @@ export default async function LogsPage({
         </div>
         <div className="flex items-center justify-between">
           <div className="text-sm text-zinc-500">
-            {rows.length}건 표시 (최대 {limit})
+            전체 {filteredCount}건 / {page}페이지 ({offset + 1}–{Math.min(
+              offset + rows.length,
+              filteredCount,
+            )})
           </div>
           <PruneButton />
         </div>
         <LogTable rows={rows} />
+        <Pagination page={page} totalPages={totalPages} searchParams={sp} />
       </main>
     </div>
   );
@@ -193,6 +211,56 @@ function Th({ children }: { children: React.ReactNode }) {
 
 function Td({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return <td className={`px-3 py-2 ${className}`}>{children}</td>;
+}
+
+function Pagination({
+  page,
+  totalPages,
+  searchParams,
+}: {
+  page: number;
+  totalPages: number;
+  searchParams: Search;
+}) {
+  if (totalPages <= 1) return null;
+
+  function hrefFor(p: number): string {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(searchParams)) {
+      if (v && k !== 'page') params.set(k, v);
+    }
+    params.set('page', String(p));
+    return `/logs?${params.toString()}`;
+  }
+
+  const prev = page > 1 ? hrefFor(page - 1) : null;
+  const next = page < totalPages ? hrefFor(page + 1) : null;
+
+  const baseLink =
+    'px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm';
+  const disabled = 'opacity-40 pointer-events-none';
+
+  return (
+    <div className="flex items-center justify-center gap-2 text-sm">
+      {prev ? (
+        <Link href={prev} className={baseLink}>
+          이전
+        </Link>
+      ) : (
+        <span className={`${baseLink} ${disabled}`}>이전</span>
+      )}
+      <span className="text-zinc-500">
+        {page} / {totalPages}
+      </span>
+      {next ? (
+        <Link href={next} className={baseLink}>
+          다음
+        </Link>
+      ) : (
+        <span className={`${baseLink} ${disabled}`}>다음</span>
+      )}
+    </div>
+  );
 }
 
 function FilterBar({ values }: { values: Search }) {
