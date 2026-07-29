@@ -19,7 +19,11 @@ info:
     - 모두 ISO 8601, 오프셋 필수.
 
     attributes(jsonb): 자유 형식 메타데이터. 예: { "recur_yearly": true, "hotel": "...", "birthday": "1981-08-03" }.
-  version: '1.1.0'
+
+    /api/stock/*: 별도 기능 — SK하이닉스(000660) 매매 **참고정보** 애그리게이터.
+    수집기가 저장한 수급·일봉·외국인보유 스냅샷을 읽고, 그 값에 근거한 브리핑을 남긴다.
+    자동매매·수익예측이 아니다. 매수/매도/목표가/등급은 스키마에 없고, 검증되지 않은 방향성 주장은 API가 거부한다.
+  version: '1.2.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -234,6 +238,119 @@ components:
       properties:
         items: { type: array, items: { $ref: '#/components/schemas/Improvement' } }
         count: { type: integer }
+
+    StockSnapshot:
+      type: object
+      description: |
+        수집기가 저장한 시장 참고정보 한 건. 자연키 (symbol, source, metric, bucket_key)로 upsert된다.
+        지표별 스키마 차이는 전부 payload 안에만 있다.
+      required: [id, symbol, source, metric, bucket_key, schema_version, captured_at, payload]
+      properties:
+        id:               { type: string, format: uuid }
+        symbol:           { type: string, description: '종목코드 (예: 000660 = SK하이닉스)' }
+        source:           { type: string, description: '데이터 출처 (kis 등)' }
+        metric:
+          type: string
+          description: |
+            지표 종류. payload 필드는 metric마다 다르다.
+            - investor_flow: close, amount_unit='million_krw', {foreign,institution,individual}_{net,buy,sell}
+              — 투자자별 매매**대금(백만원 단위)**. 순매수 = 매수 − 매도. 그대로 읽으면 조 단위를 오해하게 되니
+              환산해서 말할 것 (1,000,000백만원 = 1조).
+            - daily_ohlcv: open, high, low, close, volume
+            - foreign_holding: price, foreign_ratio(%), foreign_qty
+        bucket_key:       { type: string, description: '멱등 버킷. 일별은 YYYY-MM-DD, 인트라데이는 ISO 시각.' }
+        schema_version:   { type: integer }
+        trading_date_kst: { type: [string, 'null'], description: 'KRX 거래일 (YYYY-MM-DD)' }
+        as_of_at:         { type: [string, 'null'], format: date-time, description: 데이터 기준 시각 }
+        captured_at:      { type: string, format: date-time, description: 수집(저장) 시각. 데이터 시점이 아니라 기록 시점. }
+        collector_run_id: { type: [string, 'null'], format: uuid, description: 한 번의 수집 실행을 묶는 id }
+        payload_hash:     { type: [string, 'null'] }
+        payload:          { type: object, description: 지표별 원천 값 (metric 설명 참조) }
+
+    StockSnapshotList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/StockSnapshot' } }
+        count: { type: integer }
+
+    CreateStockSnapshotInput:
+      type: object
+      description: 수집기 전용 입력. 실제 수집된 값만 넣는다.
+      required: [symbol, source, metric, bucket_key, payload]
+      properties:
+        symbol:           { type: string, minLength: 1, maxLength: 20 }
+        source:           { type: string, minLength: 1, maxLength: 20 }
+        metric:           { type: string, minLength: 1, maxLength: 40 }
+        bucket_key:       { type: string, minLength: 1, maxLength: 60, description: '일별 YYYY-MM-DD 또는 인트라데이 ISO. 같은 키 재전송은 덮어쓴다.' }
+        schema_version:   { type: integer, minimum: 1, maximum: 1000, default: 1 }
+        trading_date_kst: { type: [string, 'null'], pattern: '^\d{4}-\d{2}-\d{2}$' }
+        as_of_at:         { type: [string, 'null'], format: date-time }
+        collector_run_id: { type: [string, 'null'], format: uuid }
+        payload:          { type: object }
+
+    StockAnalysis:
+      type: object
+      description: |
+        스냅샷을 근거로 쓴 브리핑. **매수/매도/목표가/등급 필드는 설계상 존재하지 않는다** —
+        이 API는 방향성 추천을 하지 않는다.
+      required: [id, created_at, symbol, kind, claim_type, body, input_snapshot_ids, authored_by]
+      properties:
+        id:         { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        symbol:     { type: string }
+        kind:       { type: string, enum: [pre, intraday, close, ondemand] }
+        claim_type: { type: string, enum: [state_summary, anomaly, scenario, risk, validated_directional] }
+        title:      { type: [string, 'null'] }
+        body:       { type: string }
+        input_snapshot_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: 이 브리핑이 근거로 삼은 snapshot id 목록
+        prompt_version: { type: [string, 'null'] }
+        authored_by:    { type: string }
+
+    StockAnalysisList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/StockAnalysis' } }
+        count: { type: integer }
+
+    CreateStockAnalysisInput:
+      type: object
+      required: [body]
+      properties:
+        symbol: { type: string, minLength: 1, maxLength: 20, default: '000660' }
+        kind:
+          type: string
+          enum: [pre, intraday, close, ondemand]
+          default: ondemand
+          description: 'pre=장 시작 전, intraday=장중, close=마감 후, ondemand=사용자 요청 시'
+        claim_type:
+          type: string
+          enum: [state_summary, anomaly, scenario, risk]
+          default: state_summary
+          description: |
+            state_summary: 현재 수급·가격 상태 요약 (기본).
+            anomaly: 평소 대비 튀는 값 지적.
+            scenario: 조건부 시나리오 ("X가 나오면 Y 국면").
+            risk: 지켜봐야 할 리스크.
+            validated_directional은 적중률 검증 통계가 붙기 전까지 **400으로 거부**된다.
+        title: { type: [string, 'null'], maxLength: 200 }
+        body:
+          type: string
+          minLength: 1
+          maxLength: 20000
+          description: 브리핑 본문. 스냅샷에서 실제로 읽은 값에 근거해야 하며, 매수/매도 권유는 쓰지 않는다.
+        input_snapshot_ids:
+          type: array
+          items: { type: string, format: uuid }
+          maxItems: 50
+          default: []
+          description: 근거로 삼은 snapshot id. getStockSnapshots 응답의 id를 그대로 넣는다.
+        prompt_version: { type: [string, 'null'], maxLength: 40 }
+        authored_by: { type: string, maxLength: 40, default: claude-session }
 
     Error:
       type: object
@@ -497,3 +614,80 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/stock/snapshot:
+    get:
+      operationId: getStockSnapshots
+      x-openai-isConsequential: false
+      summary: 수집된 시장 참고정보 조회
+      description: |
+        SK하이닉스(000660) 수급·일봉·외국인보유 스냅샷을 읽는다. 주가/수급 질문에 답하기 전에 먼저 호출할 것.
+        - 지금 상태만 필요하면 latest=true (지표별 최신 1건).
+        - 추세·비교가 필요하면 latest 생략 + metric 지정 + limit으로 과거 일자를 함께 받는다
+          (일자는 bucket_key/trading_date_kst, 정렬은 captured_at 역순).
+        수치를 말할 때 investor_flow 금액은 백만원 단위임을 반드시 환산할 것.
+        여기 없는 값(목표가, 컨센서스, 실시간 호가 등)은 추측하지 말고 없다고 답한다.
+      parameters:
+        - { name: symbol, in: query, description: '기본은 전체. 보통 000660.', schema: { type: string } }
+        - name: metric
+          in: query
+          description: 'investor_flow | daily_ohlcv | foreign_holding'
+          schema: { type: string }
+        - { name: source, in: query, schema: { type: string } }
+        - name: latest
+          in: query
+          description: 'true면 (symbol, metric)별 최신 1건만 반환.'
+          schema: { type: boolean, default: false }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/StockSnapshotList' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      operationId: createStockSnapshot
+      x-openai-isConsequential: true
+      summary: 스냅샷 upsert (수집기 전용)
+      description: |
+        **수집기(GitHub Actions의 collect-stock)만 호출한다.** 대화 중에는 호출하지 말 것 —
+        시장 데이터를 모델이 만들어 넣으면 대시보드가 오염된다.
+        자연키 (symbol, source, metric, bucket_key)로 upsert되므로 재전송은 멱등하다.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateStockSnapshotInput' } } }
+      responses:
+        '201': { description: 저장된 스냅샷, content: { application/json: { schema: { $ref: '#/components/schemas/StockSnapshot' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/stock/analysis:
+    get:
+      operationId: getStockAnalyses
+      x-openai-isConsequential: false
+      summary: 최근 브리핑 목록
+      description: 최신순. 같은 얘기를 반복하지 않도록 새 브리핑을 쓰기 전에 확인할 것.
+      parameters:
+        - { name: symbol, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { type: string, enum: [pre, intraday, close, ondemand] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/StockAnalysisList' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    post:
+      operationId: createStockAnalysis
+      x-openai-isConsequential: false
+      summary: 브리핑 저장 (/stock 대시보드에 표시됨)
+      description: |
+        사용자가 브리핑을 요청했을 때, 먼저 getStockSnapshots로 실제 값을 읽고 그 값에 근거해 작성한다.
+        input_snapshot_ids에 근거 스냅샷 id를 넣을 것.
+        허용 범위는 현황 요약·이상치·조건부 시나리오·리스크까지다. **매수/매도/목표가/등급은 쓰지 않는다** —
+        claim_type=validated_directional은 적중률 검증이 붙기 전까지 400으로 거부된다.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateStockAnalysisInput' } } }
+      responses:
+        '201': { description: 저장된 브리핑, content: { application/json: { schema: { $ref: '#/components/schemas/StockAnalysis' } } } }
+        '400': { description: '검증 실패 (validated_directional 포함)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
