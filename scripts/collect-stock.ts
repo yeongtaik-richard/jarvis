@@ -80,9 +80,16 @@ async function main(): Promise<void> {
         collector_run_id: runId,
         payload: {
           close: latest.close,
+          amount_unit: 'million_krw', // 대금 단위: 백만원
           foreign_net: latest.frgnNet,
           institution_net: latest.orgnNet,
           individual_net: latest.prsnNet,
+          foreign_buy: latest.frgnBuy,
+          foreign_sell: latest.frgnSell,
+          institution_buy: latest.orgnBuy,
+          institution_sell: latest.orgnSell,
+          individual_buy: latest.prsnBuy,
+          individual_sell: latest.prsnSell,
         },
       });
       console.log(`[collect] investor_flow ${ymd(latest.date)} ok`);

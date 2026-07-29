@@ -37,6 +37,13 @@ function korQty(n: number, suffix = ''): string {
   if (a >= 1e4) return `${Math.round(n / 1e4).toLocaleString('ko-KR')}만${suffix}`;
   return `${n.toLocaleString('ko-KR')}${suffix}`;
 }
+// 투자자 매매대금은 백만원(million KRW) 단위로 저장됨 → 조/억으로 환산.
+function moneyMil(pbmn: number): string {
+  const a = Math.abs(pbmn);
+  if (a >= 1_000_000) return `${(a / 1_000_000).toFixed(2)}조`;
+  if (a >= 100) return `${Math.round(a / 100).toLocaleString('ko-KR')}억`;
+  return `${Math.round(a).toLocaleString('ko-KR')}백만`;
+}
 
 const METRIC_LABEL: Record<string, string> = {
   investor_flow: '수급 · 투자자별 순매수',
@@ -45,16 +52,26 @@ const METRIC_LABEL: Record<string, string> = {
 };
 
 type Tone = 'pos' | 'neg' | 'neutral';
-type Row = { label: string; value: string; tone?: Tone };
+type Row = { label: string; value: string; tone?: Tone; sub?: string };
 
-function flowRow(label: string, v: number | null): Row {
-  if (v === null) return { label, value: '—' };
-  if (v === 0) return { label, value: '보합', tone: 'neutral' };
-  const word = v > 0 ? '순매수' : '순매도';
+function flowRow(
+  label: string,
+  net: number | null,
+  buy: number | null,
+  sell: number | null,
+): Row {
+  if (net === null) return { label, value: '—' };
+  const sub =
+    buy !== null && sell !== null
+      ? `매수 ${moneyMil(buy)} · 매도 ${moneyMil(sell)}`
+      : undefined;
+  if (net === 0) return { label, value: '보합', tone: 'neutral', sub };
+  const word = net > 0 ? '순매수' : '순매도';
   return {
     label,
-    value: `${word} ${Math.abs(v).toLocaleString('ko-KR')}`,
-    tone: v > 0 ? 'pos' : 'neg',
+    value: `${word} ${moneyMil(net)}`,
+    tone: net > 0 ? 'pos' : 'neg',
+    sub,
   };
 }
 
@@ -69,9 +86,14 @@ function metricRows(item: ApiStockSnapshot): Row[] {
     const close = num('close');
     return [
       { label: '종가', value: close === null ? '—' : won(close) },
-      flowRow('외국인', num('foreign_net')),
-      flowRow('기관', num('institution_net')),
-      flowRow('개인', num('individual_net')),
+      flowRow('외국인', num('foreign_net'), num('foreign_buy'), num('foreign_sell')),
+      flowRow(
+        '기관',
+        num('institution_net'),
+        num('institution_buy'),
+        num('institution_sell'),
+      ),
+      flowRow('개인', num('individual_net'), num('individual_buy'), num('individual_sell')),
     ];
   }
   if (item.metric === 'daily_ohlcv') {
@@ -260,11 +282,18 @@ export default async function StockDashboardPage() {
                   <dl className="space-y-1.5 text-sm">
                     {metricRows(i).map((r) => (
                       <div key={r.label} className="flex justify-between gap-3">
-                        <dt className="text-zinc-500">{r.label}</dt>
-                        <dd
-                          className={`text-right tabular-nums ${r.tone ? toneClass[r.tone] : ''}`}
-                        >
-                          {r.value}
+                        <dt className="text-zinc-500 shrink-0">{r.label}</dt>
+                        <dd className="text-right">
+                          <span
+                            className={`tabular-nums ${r.tone ? toneClass[r.tone] : ''}`}
+                          >
+                            {r.value}
+                          </span>
+                          {r.sub && (
+                            <span className="block text-[11px] text-zinc-400 tabular-nums">
+                              {r.sub}
+                            </span>
+                          )}
                         </dd>
                       </div>
                     ))}
@@ -279,7 +308,8 @@ export default async function StockDashboardPage() {
         )}
 
         <p className="text-[11px] text-zinc-400 pt-2">
-          수급 순매수는 KIS 순매수 금액(부호=방향). 일별 마감 후 수집.
+          수급은 KIS 투자자별 매매대금(백만원→조/억 환산). 순매수 = 매수 − 매도.
+          일별 마감 후 수집.
         </p>
       </main>
     </div>

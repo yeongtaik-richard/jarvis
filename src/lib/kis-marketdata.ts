@@ -63,12 +63,22 @@ const num = (v: string | undefined): number => {
 export interface InvestorFlow {
   date: string; // YYYYMMDD
   close: number;
+  // net / buy / sell trading amount in 백만원 (million KRW), per investor type
   prsnNet: number;
   frgnNet: number;
   orgnNet: number;
+  prsnBuy: number;
+  frgnBuy: number;
+  orgnBuy: number;
+  prsnSell: number;
+  frgnSell: number;
+  orgnSell: number;
 }
 
-/** Daily net-buy amount by 개인/외국인/기관, newest-first, settled days only. */
+/**
+ * Daily buy/sell/net trading amount (백만원) by 개인/외국인/기관, newest-first,
+ * settled days only. `_shnu_` = 매수, `_seln_` = 매도, `_ntby_` = 순매수.
+ */
 export async function investorFlows(
   token: string,
   creds: KisCreds,
@@ -89,6 +99,12 @@ export async function investorFlows(
       prsnNet: num(o.prsn_ntby_tr_pbmn),
       frgnNet: num(o.frgn_ntby_tr_pbmn),
       orgnNet: num(o.orgn_ntby_tr_pbmn),
+      prsnBuy: num(o.prsn_shnu_tr_pbmn),
+      frgnBuy: num(o.frgn_shnu_tr_pbmn),
+      orgnBuy: num(o.orgn_shnu_tr_pbmn),
+      prsnSell: num(o.prsn_seln_tr_pbmn),
+      frgnSell: num(o.frgn_seln_tr_pbmn),
+      orgnSell: num(o.orgn_seln_tr_pbmn),
     }));
 }
 
