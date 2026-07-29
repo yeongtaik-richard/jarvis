@@ -15,9 +15,10 @@ SK하이닉스(`000660`) **매매 참고정보** 대시보드. 리처드님이 �
 ## 데이터 흐름
 
 ```
-GitHub Actions cron (18:43 KST, 평일)
+GitHub Actions cron (18:43 KST 마감 / 08:10 KST 프리마켓, 평일)
   └─ scripts/collect-stock.ts
        └─ src/lib/kis-marketdata.ts  (KIS 읽기전용)
+       └─ POST ${JARVIS_BASE_URL}/api/stock/collector-run  ← 실행 시작/종료 보고
        └─ POST ${JARVIS_BASE_URL}/api/stock/snapshot   ← Bearer
               └─ upsert → Neon (stock_snapshots)
                      └─ /stock 대시보드 (server component, 서비스 직접 조회)
@@ -37,11 +38,12 @@ Claude 세션 (온디맨드 브리핑)
 
 | 영역 | 파일 |
 |---|---|
-| DB 스키마 | `src/db/schema.ts` — `stockSnapshots`, `stockAnalysis` |
-| 마이그레이션 | `drizzle/0004_stock_snapshots.sql`, `0005_stock_analysis.sql` |
+| DB 스키마 | `src/db/schema.ts` — `stockSnapshots`, `stockAnalysis`, `collectorRuns`, `tradeDecisions` |
+| 마이그레이션 | `drizzle/0004_stock_snapshots.sql` ~ `0007_trade_decisions.sql` |
 | zod 입력/쿼리 | `src/lib/schemas.ts` — `CreateStockSnapshotInput` 외 |
-| 서비스 | `src/lib/stock-service.ts`, `src/lib/stock-analysis-service.ts` |
-| API | `src/app/api/stock/snapshot/route.ts`, `.../analysis/route.ts` |
+| 서비스 | `src/lib/stock-service.ts`, `stock-analysis-service.ts`, `collector-run-service.ts`, `trade-decision-service.ts` |
+| API | `src/app/api/stock/{snapshot,analysis,collector-run,health,decision}/route.ts` |
+| 결정 로그 UI | `src/app/stock/decisions/` (page + server actions) |
 | KIS 클라이언트 | `src/lib/kis-marketdata.ts` (읽기전용) |
 | 수집기 | `scripts/collect-stock.ts` |
 | cron | `.github/workflows/collect-stock.yml` |
@@ -80,6 +82,22 @@ Claude 세션 (온디맨드 브리핑)
 - `input_snapshot_ids`: 이 브리핑이 근거로 삼은 snapshot id 배열
 - **buy/sell/target/rating 컬럼 없음** — 설계상 의도.
 
+### `collector_runs` — 수집 실행 기록 (운영 모니터링)
+- `id`는 수집기가 만든 `collector_run_id`와 **같은 값** → 그 실행이 남긴 스냅샷을
+  조인 없이 추적할 수 있다.
+- `kind`: `close | premarket | backfill | manual`, `status`: `running | ok | partial | error`
+- 수집기가 시작·종료 두 번 보고한다(같은 id로 upsert). **보고가 실패해도 수집은 계속**한다
+  — 모니터링 때문에 데이터를 잃는 건 본말전도.
+
+### `trade_decisions` — 결정 → 결과 → 교훈
+- **사람이 실제로 한 결정의 기록**이다. 여기 `action`(buy/sell/…)이 있다고 해서 위 정직성
+  규칙이 풀린 게 아니다: AI는 무엇을 살지 제안하지 않고, 사용자가 이미 한 행동을 받아적을
+  뿐이다. openapi 설명에도 "추측해서 넣지 말 것"을 박아뒀다.
+- `rationale`(결정 시점 근거) → 나중에 `outcome`·`lesson`을 붙이면 `status`가 `closed`로
+  넘어가고 `outcome_at`이 찍힌다. **사후 각색이 이 로그의 유일한 실패 모드**라 근거는
+  결정 시점에 적는 걸 전제로 한다.
+- `analysis_id`/`input_snapshot_ids`로 그때 본 브리핑·스냅샷을 매달 수 있다.
+
 ---
 
 ## API
@@ -97,11 +115,19 @@ Claude 세션 (온디맨드 브리핑)
 | GET | `/api/stock/snapshot?latest=true` | `(symbol,metric)`별 최신 1건. `symbol/metric/source/limit` 필터 |
 | POST | `/api/stock/analysis` | 브리핑 생성, 201. `validated_directional`은 400 |
 | GET | `/api/stock/analysis?limit=n` | 최신순. `symbol/kind` 필터 |
+| POST | `/api/stock/collector-run` | 수집 실행 보고(upsert). **수집기 전용** |
+| GET | `/api/stock/collector-run` | 실행 이력. `symbol/status` 필터 |
+| GET | `/api/stock/health` | 수집 생존 요약 — `missed`, 마지막 성공, 지표별 최신 버킷 |
+| POST/GET | `/api/stock/decision` | 매매 결정 기록/목록 |
+| GET/PATCH | `/api/stock/decision/{id}` | 단건 / 결과·교훈 붙이기 |
 
-네 라우트 모두 `public/openapi.yaml`(v1.2.0)에 문서화돼 있어 ChatGPT Actions에서
-읽고 브리핑을 남길 수 있다. 스펙 쪽 정직성 장치: `CreateStockAnalysisInput`의
-`claim_type` enum에서 `validated_directional`을 **뺐고**, `POST /api/stock/snapshot`은
-"수집기 전용, 대화 중 호출 금지"로 설명해 모델이 시세를 지어내 넣지 못하게 막았다.
+`public/openapi.yaml`(v1.3.0)에 문서화돼 있다. 예외는 **`POST /api/stock/collector-run`**
+하나 — 수집기 전용이고 모델이 실행 기록을 만들 이유가 없어 스펙에서 뺐다.
+
+스펙 쪽 정직성 장치: `CreateStockAnalysisInput`의 `claim_type` enum에서
+`validated_directional`을 **뺐고**, `POST /api/stock/snapshot`은 "수집기 전용, 대화 중
+호출 금지", `POST /api/stock/decision`은 "사용자가 이미 한 행동만 기록, action을 추측하지
+말 것"으로 설명해 모델이 데이터를 지어내지 못하게 막았다.
 
 ---
 
@@ -136,15 +162,47 @@ Claude 세션 (온디맨드 브리핑)
 
 ## GitHub Actions cron
 
-`.github/workflows/collect-stock.yml`:
-- `cron: '43 9 * * 1-5'` = **18:43 KST 평일** (투자자 flow 확정 후, 정각 지연 회피용
-  off-minute). `workflow_dispatch`로 수동 트리거 가능.
+`.github/workflows/collect-stock.yml` — 스케줄 2개:
+- `'43 9 * * 1-5'` = **18:43 KST 평일** 마감 수집 (투자자 flow 확정 후, 정각 지연 회피용
+  off-minute).
+- `'10 23 * * 0-4'` = **08:10 KST 평일** 프리마켓. 새 지표를 얻는 게 아니라
+  **안전망**이다: 마감 수집이 실패했으면 전날 데이터를 다시 채우고, 아침 시점의
+  외국인 보유비율을 그날 버킷으로 하나 남긴다.
+- 어느 cron이 떴는지는 `github.event.schedule`로 구분해 `STOCK_RUN_KIND`(close/premarket)로
+  넘긴다. 수동 실행이면 비어 있고, 수집기가 알아서 `backfill`/`manual`로 붙인다.
+- `workflow_dispatch`로 수동 트리거 가능.
 - Node `.nvmrc`(20.20.2), pnpm 9.
 - Repo Secrets: `KIS_APP_KEY`, `KIS_APP_SECRET`, `JARVIS_API_TOKEN`,
   `JARVIS_BASE_URL`. (Environment secrets 아님 — **Repository secrets**)
 - 수동 실행: `gh workflow run collect-stock.yml` → `gh run watch <id> --exit-status`.
 - 백필도 CI에서 가능: `gh workflow run collect-stock.yml -f backfill_days=30`.
   스케줄 실행은 input이 없으므로 `STOCK_BACKFILL_DAYS`가 `0`(최신 1일)으로 떨어진다.
+
+> ⚠️ **스케줄 첫 회차는 뜨지 않았다.** 2026-07-29에 워크플로를 올렸고 그날 18:43 KST
+> 스케줄은 발화하지 않았다(수동 실행 2건만 기록). 새로 등록된 cron이 첫 회차를 건너뛰는
+> 흔한 케이스로 보인다. **자동 실행이 실제로 도는지 확인되기 전까지는 미검증 상태**로 볼 것 —
+> 확인 방법은 `gh run list --workflow=collect-stock.yml`에 `schedule` 이벤트가 찍히는지,
+> 또는 `/stock` 상단 경고 배너가 사라지는지다.
+
+---
+
+## 운영 모니터링
+
+수집이 조용히 실패하는 걸 막는 장치. 세 겹이다.
+
+1. **`collector_runs` 기록** — 수집기가 실행 시작·종료를 보고한다. 실패 사유는 `error`에
+   들어가고, `partial`(일부만 저장)도 따로 구분된다.
+2. **`GET /api/stock/health`** — `missed`, 마지막 성공 실행, 지표별 최신 버킷을 한 번에.
+   외부에서 폴링하거나 세션에서 "수집 잘 되고 있어?"에 답할 때 쓴다.
+3. **`/stock` 상단 경고 배너** — `missed`면 예정 시각·마지막 성공·에러 앞부분을 보여준다.
+
+`missed` 판정: `lastExpectedCloseRun()`이 "이미 지났어야 할 가장 최근 평일 18:43 KST +
+유예 45분"을 구하고, 그 시각 이후 `status='ok'`인 실행이 없으면 참. GitHub cron이
+늦게 뜨는 걸 유예로 흡수한다.
+
+> **공휴일 오탐.** KRX 휴장일을 모른다 — 평일 휴장일엔 `missed`가 참으로 뜬다.
+> 배너·openapi 설명 모두에 이 단서를 적어놨다. 휴장일 캘린더를 붙이기 전까지는
+> "공휴일이면 정상"이 정답이다.
 
 ---
 
@@ -245,17 +303,20 @@ STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
   읽고 브리핑을 남길 수 있다.
 - **추이 차트** — 종가 시계열 + 투자자별 순매수 스몰 멀티플(같은 스케일) + 표로 보기.
   부호 색을 국내 관례(빨강=순매수)로 통일하면서 색각 이상 실패를 걷어냈다.
+- **운영 모니터링** — `collector_runs` + `/api/stock/health` + 대시보드 경고 배너.
+- **매매 결정 로그** — `trade_decisions` + `/stock/decisions` + API 4개.
+- **아침 프리마켓 cron** — 08:10 KST 평일 (마감 수집 실패 시 안전망).
 
 ### ⬜ 남은 일 (대략 우선순위 순)
-1. **자동 브리핑 스케줄** — 지금은 수동 온디맨드. Claude 루틴으로 마감 후 자동 작성.
-2. **`tradeDecisionLog`** — 결정 → 결과 → 교훈 루프 테이블 + UI (제품 개선의 핵심 피드백).
-3. **운영 모니터링** — `collectorRuns` 기록 + staleness/수집 실패 알림 (지금은 실패해도
-   조용함, cron 누락을 놓칠 수 있음).
-4. **아침 프리마켓 수집 cron** 추가 (현재는 마감 후 1회만).
-5. **수집 항목 확대** — KRX 연기금 세분·이력, DART 5%+ 대주주, SOX/글로벌 오버나이트 갭.
-6. **장중 하이브리드** — 결정론적 지표 + AI 저빈도. 실시간 시세가 필요하면 cron으로는
+1. **자동 브리핑 스케줄** — 지금은 수동 온디맨드. 2026-07-29에 **보류 결정**:
+   GitHub Actions + Claude API로 갈지, Claude Code 클라우드 루틴으로 갈지 정하지 않았다.
+   전자는 `ANTHROPIC_API_KEY` 시크릿과 호출 비용이 붙고, 후자는 로직이 레포 밖에 산다.
+2. **cron 자동 실행 검증** — 위 경고 참고. 스케줄 발화가 확인되면 이 항목은 닫힌다.
+3. **KRX 휴장일 캘린더** — `missed` 공휴일 오탐 제거.
+4. **수집 항목 확대** — KRX 연기금 세분·이력, DART 5%+ 대주주, SOX/글로벌 오버나이트 갭.
+5. **장중 하이브리드** — 결정론적 지표 + AI 저빈도. 실시간 시세가 필요하면 cron으로는
    안 되고 상시 프로세스 호스팅이 필요 (아래 열린 결정).
-7. **방향성 지표 + 적중률 검증** — §12의 `validated_directional`을 해금하는 전제조건.
+6. **방향성 지표 + 적중률 검증** — §12의 `validated_directional`을 해금하는 전제조건.
    검증 통계 없이는 방향성 주장 금지. 이후 다종목 확장.
 
 ### 열린 결정
