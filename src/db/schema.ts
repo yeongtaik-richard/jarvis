@@ -147,6 +147,29 @@ export const stockSnapshots = pgTable(
   ],
 );
 
+// AI briefings / opinions over the snapshots (PLAN-DASHBOARD §3, §12).
+// claim_type/kind kept as text (enforced by zod at the API); body is the
+// human-readable briefing. NO buy/sell/target/rating column by design (§12).
+export const stockAnalysis = pgTable(
+  'stock_analysis',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    symbol: text('symbol').notNull(),
+    kind: text('kind').notNull().default('ondemand'), // pre | intraday | close | ondemand
+    claimType: text('claim_type').notNull().default('state_summary'),
+    title: text('title'),
+    body: text('body').notNull(),
+    inputSnapshotIds: uuid('input_snapshot_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    promptVersion: text('prompt_version'),
+    authoredBy: text('authored_by').notNull().default('claude-session'),
+  },
+  (t) => [index('ix_stock_analysis_symbol_created').on(t.symbol, sql`created_at desc`)],
+);
+
 export type EventThread = typeof eventThreads.$inferSelect;
 export type EventVersion = typeof eventVersions.$inferSelect;
 export type NewEventVersion = typeof eventVersions.$inferInsert;
@@ -156,3 +179,5 @@ export type RequestLog = typeof requestLogs.$inferSelect;
 export type NewRequestLog = typeof requestLogs.$inferInsert;
 export type StockSnapshot = typeof stockSnapshots.$inferSelect;
 export type NewStockSnapshot = typeof stockSnapshots.$inferInsert;
+export type StockAnalysis = typeof stockAnalysis.$inferSelect;
+export type NewStockAnalysis = typeof stockAnalysis.$inferInsert;

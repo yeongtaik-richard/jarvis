@@ -138,3 +138,37 @@ export const StockSnapshotQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 export type StockSnapshotQuery = z.infer<typeof StockSnapshotQuery>;
+
+// AI briefings / opinions. claim_type/kind enforced here (DB column is text).
+export const StockAnalysisKind = z.enum(['pre', 'intraday', 'close', 'ondemand']);
+export const StockClaimType = z.enum([
+  'state_summary',
+  'anomaly',
+  'scenario',
+  'risk',
+  'validated_directional',
+]);
+export const CreateStockAnalysisInput = z
+  .object({
+    symbol: z.string().min(1).max(20).default('000660'),
+    kind: StockAnalysisKind.default('ondemand'),
+    claim_type: StockClaimType.default('state_summary'),
+    title: z.string().max(200).nullish(),
+    body: z.string().min(1).max(20000),
+    input_snapshot_ids: z.array(z.string().uuid()).max(50).default([]),
+    prompt_version: z.string().max(40).nullish(),
+    authored_by: z.string().max(40).default('claude-session'),
+  })
+  // §12: directional claims require validation stats (not available until P4).
+  .refine((v) => v.claim_type !== 'validated_directional', {
+    message: 'validated_directional requires validation stats (P4)',
+    path: ['claim_type'],
+  });
+export type CreateStockAnalysisInput = z.infer<typeof CreateStockAnalysisInput>;
+
+export const StockAnalysisQuery = z.object({
+  symbol: z.string().min(1).max(20).optional(),
+  kind: StockAnalysisKind.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type StockAnalysisQuery = z.infer<typeof StockAnalysisQuery>;

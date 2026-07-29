@@ -1,5 +1,10 @@
 import { Header } from '@/app/components/Header';
-import { StockSnapshotQuery } from '@/lib/schemas';
+import { StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
+import {
+  searchStockAnalysis,
+  toApiStockAnalysis,
+  type ApiStockAnalysis,
+} from '@/lib/stock-analysis-service';
 import {
   searchStockSnapshots,
   toApiStockSnapshot,
@@ -118,10 +123,63 @@ const toneClass: Record<Tone, string> = {
   neutral: 'text-zinc-700 dark:text-zinc-300',
 };
 
+const CLAIM_LABEL: Record<string, string> = {
+  state_summary: '현황 요약',
+  anomaly: '이상 신호',
+  scenario: '시나리오',
+  risk: '리스크',
+  validated_directional: '검증된 방향성',
+};
+function claimBadge(ct: string): string {
+  if (ct === 'anomaly') return 'bg-amber-100 text-amber-800';
+  if (ct === 'risk') return 'bg-rose-100 text-rose-800';
+  if (ct === 'scenario') return 'bg-blue-100 text-blue-800';
+  return 'bg-zinc-200 text-zinc-700';
+}
+const KIND_LABEL: Record<string, string> = {
+  pre: '프리마켓',
+  intraday: '장중',
+  close: '마감',
+  ondemand: '온디맨드',
+};
+
+function BriefingCard({
+  a,
+  now,
+  prominent = false,
+}: {
+  a: ApiStockAnalysis;
+  now: number;
+  prominent?: boolean;
+}) {
+  const mins = minutesAgo(a.created_at, now);
+  return (
+    <div
+      className={`rounded-lg border p-4 ${prominent ? 'border-zinc-300 dark:border-zinc-700' : 'border-zinc-200 dark:border-zinc-800'}`}
+    >
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <span className={`text-xs px-2 py-0.5 rounded ${claimBadge(a.claim_type)}`}>
+          {CLAIM_LABEL[a.claim_type] ?? a.claim_type}
+        </span>
+        <span className="text-xs text-zinc-500">{KIND_LABEL[a.kind] ?? a.kind}</span>
+        <span className="text-xs text-zinc-400 ml-auto">{agoText(mins)}</span>
+      </div>
+      {a.title && <div className="font-medium mb-1">{a.title}</div>}
+      <div className="text-sm whitespace-pre-wrap leading-relaxed">{a.body}</div>
+      <div className="mt-2 text-[11px] text-zinc-400">
+        {a.authored_by} · {a.symbol} · 예측 아님(참고용)
+      </div>
+    </div>
+  );
+}
+
 export default async function StockDashboardPage() {
   const query = StockSnapshotQuery.parse({ latest: true, limit: 100 });
   const rows = await searchStockSnapshots(query);
   const items = rows.map(toApiStockSnapshot);
+  const analyses = (
+    await searchStockAnalysis(StockAnalysisQuery.parse({ limit: 5 }))
+  ).map(toApiStockAnalysis);
   const now = Date.now();
   const lastCaptured = items.reduce<string | null>(
     (max, i) => (max && max >= i.captured_at ? max : i.captured_at),
@@ -154,6 +212,27 @@ export default async function StockDashboardPage() {
             '아직 수집된 데이터 없음'
           )}
         </div>
+
+        {analyses.length > 0 && (
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+              최신 브리핑
+            </h2>
+            <BriefingCard a={analyses[0]!} now={now} prominent />
+            {analyses.length > 1 && (
+              <details className="text-sm">
+                <summary className="cursor-pointer text-zinc-500 select-none">
+                  이전 브리핑 {analyses.length - 1}건
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {analyses.slice(1).map((a) => (
+                    <BriefingCard key={a.id} a={a} now={now} />
+                  ))}
+                </div>
+              </details>
+            )}
+          </section>
+        )}
 
         {items.length === 0 ? (
           <div className="text-center py-12 text-zinc-500">
