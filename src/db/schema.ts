@@ -123,6 +123,30 @@ export const requestLogs = pgTable(
   ],
 );
 
+// Stock reference-info snapshots (트레이딩 참고정보 애그리게이터, PLAN-DASHBOARD §3).
+// 수집기가 시간대별로 POST. bucketKey가 멱등 자연키(일별=YYYY-MM-DD, 인트라데이=ISO).
+export const stockSnapshots = pgTable(
+  'stock_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    symbol: text('symbol').notNull(),
+    source: text('source').notNull(), // 'kis' | 'krx' | 'dart' | 'fake' ...
+    metric: text('metric').notNull(), // 'investor_flow' | 'daily_ohlcv' | 'sox' ...
+    bucketKey: text('bucket_key').notNull(), // 멱등 키: 일별 YYYY-MM-DD, 인트라데이 ISO
+    schemaVersion: smallint('schema_version').notNull().default(1),
+    tradingDateKst: text('trading_date_kst'), // 정보용 (KRX 거래일)
+    asOfAt: timestamp('as_of_at', { withTimezone: true }), // 데이터 기준 시각
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+    collectorRunId: uuid('collector_run_id'),
+    payloadHash: text('payload_hash'),
+    payload: jsonb('payload').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => [
+    uniqueIndex('ux_stock_snapshot_natural').on(t.symbol, t.source, t.metric, t.bucketKey),
+    index('ix_stock_snapshot_symbol_metric').on(t.symbol, t.metric, sql`captured_at desc`),
+  ],
+);
+
 export type EventThread = typeof eventThreads.$inferSelect;
 export type EventVersion = typeof eventVersions.$inferSelect;
 export type NewEventVersion = typeof eventVersions.$inferInsert;
@@ -130,3 +154,5 @@ export type ImprovementNote = typeof improvementNotes.$inferSelect;
 export type NewImprovementNote = typeof improvementNotes.$inferInsert;
 export type RequestLog = typeof requestLogs.$inferSelect;
 export type NewRequestLog = typeof requestLogs.$inferInsert;
+export type StockSnapshot = typeof stockSnapshots.$inferSelect;
+export type NewStockSnapshot = typeof stockSnapshots.$inferInsert;

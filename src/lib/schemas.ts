@@ -110,3 +110,31 @@ export const ImprovementSearchQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 export type ImprovementSearchQuery = z.infer<typeof ImprovementSearchQuery>;
+
+// Stock reference-info snapshots (aggregator). API fields are snake_case.
+export const CreateStockSnapshotInput = z.object({
+  symbol: z.string().min(1).max(20),
+  source: z.string().min(1).max(20),
+  metric: z.string().min(1).max(40),
+  // 멱등 자연키: 일별 'YYYY-MM-DD', 인트라데이 ISO 버킷. 재수집 시 upsert 됨.
+  bucket_key: z.string().min(1).max(60),
+  schema_version: z.number().int().min(1).max(1000).default(1),
+  trading_date_kst: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD')
+    .nullish(),
+  as_of_at: isoDateTime,
+  collector_run_id: z.string().uuid().nullish(),
+  payload: attributesSchema,
+});
+export type CreateStockSnapshotInput = z.infer<typeof CreateStockSnapshotInput>;
+
+export const StockSnapshotQuery = z.object({
+  symbol: z.string().min(1).max(20).optional(),
+  metric: z.string().min(1).max(40).optional(),
+  source: z.string().min(1).max(20).optional(),
+  // latest=true → (symbol, metric)별 최신 1건만
+  latest: queryBool.default(false),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type StockSnapshotQuery = z.infer<typeof StockSnapshotQuery>;

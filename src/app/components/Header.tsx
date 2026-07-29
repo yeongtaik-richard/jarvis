@@ -18,6 +18,9 @@ export function Header() {
           <Link href="/improvement" className="hover:text-zinc-900 dark:hover:text-zinc-100">
             Improvements
           </Link>
+          <Link href="/stock" className="hover:text-zinc-900 dark:hover:text-zinc-100">
+            Stock
+          </Link>
           <Link href="/logs" className="hover:text-zinc-900 dark:hover:text-zinc-100">
             Server Logs
           </Link>
