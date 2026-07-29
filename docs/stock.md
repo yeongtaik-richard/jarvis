@@ -97,6 +97,11 @@ Claude 세션 (온디맨드 브리핑)
 | POST | `/api/stock/analysis` | 브리핑 생성, 201. `validated_directional`은 400 |
 | GET | `/api/stock/analysis?limit=n` | 최신순. `symbol/kind` 필터 |
 
+네 라우트 모두 `public/openapi.yaml`(v1.2.0)에 문서화돼 있어 ChatGPT Actions에서
+읽고 브리핑을 남길 수 있다. 스펙 쪽 정직성 장치: `CreateStockAnalysisInput`의
+`claim_type` enum에서 `validated_directional`을 **뺐고**, `POST /api/stock/snapshot`은
+"수집기 전용, 대화 중 호출 금지"로 설명해 모델이 시세를 지어내 넣지 못하게 막았다.
+
 ---
 
 ## KIS 클라이언트 & 수집기
@@ -111,6 +116,12 @@ Claude 세션 (온디맨드 브리핑)
 `scripts/collect-stock.ts`:
 - KIS에서 위 3종 fetch → 정규화 → jarvis API로 POST. `collector_run_id`(uuid)로
   한 번의 수집을 묶는다.
+- **백필 모드** `--backfill[=N]` / `STOCK_BACKFILL_DAYS=N` (기본 30, 상한 120):
+  최신 1일이 아니라 N일치를 전부 POST한다. upsert가 멱등이라 반복 실행 안전.
+  **오래된 날짜부터** POST하므로 `captured_at` 순서가 거래일 순서와 어긋나지 않는다
+  (대시보드의 "최신"은 `captured_at` 기준이라 이 순서가 중요하다).
+  `foreign_holding`은 KIS inquire-price가 이력을 안 줘서 **백필해도 오늘 1건뿐**이다.
+  실측: 30일 요청 → 거래일 22일 × 2지표 + 당일 보유비율 1건 = 45건.
 - **import는 상대경로** (`../src/lib/kis-marketdata`) — tsx 단독 실행이 `@/` alias를
   해석하지 못함. `@/`로 바꾸지 말 것.
 - env: `KIS_APP_KEY`, `KIS_APP_SECRET`, `JARVIS_API_TOKEN`, `JARVIS_BASE_URL`,
@@ -131,6 +142,8 @@ Claude 세션 (온디맨드 브리핑)
 - Repo Secrets: `KIS_APP_KEY`, `KIS_APP_SECRET`, `JARVIS_API_TOKEN`,
   `JARVIS_BASE_URL`. (Environment secrets 아님 — **Repository secrets**)
 - 수동 실행: `gh workflow run collect-stock.yml` → `gh run watch <id> --exit-status`.
+- 백필도 CI에서 가능: `gh workflow run collect-stock.yml -f backfill_days=30`.
+  스케줄 실행은 input이 없으므로 `STOCK_BACKFILL_DAYS`가 `0`(최신 1일)으로 떨어진다.
 
 ---
 
@@ -151,6 +164,16 @@ pnpm dev                 # localhost:3000
 pnpm typecheck           # tsc --noEmit (커밋 전 필수)
 pnpm db:migrate          # drizzle/*.sql 전체 재적용 (idempotent, create ... if not exists)
 pnpm collect:stock       # .env.local 로 수집기 로컬 실행 (JARVIS_BASE_URL 대상으로 POST)
+```
+
+로컬 백필(=프로덕션 Neon에 직접 쌓기): dev 서버를 띄우고 그쪽으로 POST하면 Vercel
+Deployment Protection을 우회할 수 있다. `.env.local`의 `DATABASE_URL`이 프로덕션
+Neon이라 결과는 CI 실행과 동일하다.
+
+```bash
+pnpm dev &
+set -a; . ~/git/high-high/.env; set +a   # KIS 키 (레포 밖에만 둔다)
+STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
 ```
 
 `.env.local` 필요 키: `DATABASE_URL`, `JARVIS_API_TOKEN`, `JARVIS_WEB_PASSWORD`.
@@ -181,6 +204,9 @@ pnpm collect:stock       # .env.local 로 수집기 로컬 실행 (JARVIS_BASE_U
   Secret의 `JARVIS_BASE_URL`(보호 안 된 경로)로 POST하기 때문.
 - **tsx alias 미해석.** `scripts/`의 단독 스크립트는 `@/` 대신 상대경로 import.
 - **captured_at은 DB `now()`.** upsert set에서 Node `new Date()` 쓰면 시각 역행.
+- **`latest=true`는 `captured_at`(기록 시각) 기준이지 거래일 기준이 아니다.**
+  과거 버킷 하나만 다시 수집하면 그 옛 날짜가 대시보드에 "최신"으로 뜬다. 백필은
+  오래된 날짜부터 POST해서 이 문제를 피한다. 단건 재수집은 이 점을 알고 할 것.
 - **수급 대금 단위 = 백만원.** 표시 전 조/억 환산 필수.
 - **KIS 주문 코드 금지 / KIS 키 Vercel 반입 금지** (위 §KIS 참고).
 
@@ -194,8 +220,15 @@ pnpm collect:stock       # .env.local 로 수집기 로컬 실행 (JARVIS_BASE_U
 - `/stock` 대시보드 (지표별 카드 + "최신 브리핑" 섹션)
 - 수급 매수/매도 분해 표시 + 대금 단위(백만원→조/억) 환산
 - 온디맨드 브리핑 (Claude 세션이 수동으로 작성·POST)
+- **30일 백필** — 수집기 `--backfill` 모드 + workflow_dispatch input.
+  2026-07-29 실행분: 거래일 22일치 `investor_flow`/`daily_ohlcv` 적재 완료
+  (2026-06-29~07-29). 이제 추세 계산의 원천 데이터는 있다.
+- **openapi.yaml에 `/api/stock/*` 4개 추가** (v1.2.0) — ChatGPT Actions에서 스냅샷을
+  읽고 브리핑을 남길 수 있다.
 
 ### ⬜ 남은 일 (대략 우선순위 순)
+0. **대시보드 시계열 표시** — 데이터는 22일치 쌓였는데 화면은 여전히 최신 1건만 본다.
+   스파크라인/추세(N일 누적 순매수, 종가 추이)를 붙이는 게 백필의 원래 목적.
 1. **자동 브리핑 스케줄** — 지금은 수동 온디맨드. Claude 루틴으로 마감 후 자동 작성.
 2. **`tradeDecisionLog`** — 결정 → 결과 → 교훈 루프 테이블 + UI (제품 개선의 핵심 피드백).
 3. **운영 모니터링** — `collectorRuns` 기록 + staleness/수집 실패 알림 (지금은 실패해도
