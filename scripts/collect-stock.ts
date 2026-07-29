@@ -59,6 +59,28 @@ interface SnapshotInput {
   payload: Record<string, unknown>;
 }
 
+/**
+ * 실행 자체를 jarvis에 보고한다 (운영 모니터링). 보고가 실패해도 수집은 계속한다 —
+ * 모니터링 때문에 데이터 수집을 잃는 건 본말전도.
+ */
+async function reportRun(
+  token: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const res = await fetch(`${BASE}/api/stock/collector-run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      console.warn(`[collect] run report failed: ${res.status} ${(await res.text()).slice(0, 120)}`);
+    }
+  } catch (e) {
+    console.warn(`[collect] run report failed: ${String(e)}`);
+  }
+}
+
 async function postSnapshot(token: string, snap: SnapshotInput): Promise<void> {
   const res = await fetch(`${BASE}/api/stock/snapshot`, {
     method: 'POST',
@@ -82,10 +104,19 @@ async function main(): Promise<void> {
   const apiToken = required('JARVIS_API_TOKEN');
   const runId = randomUUID();
   const backfill = backfillDays();
+  // close/premarket은 워크플로가 알려준다 (어느 cron이 떴는지). 백필은 스스로 안다.
+  const kind = process.env.STOCK_RUN_KIND || (backfill ? 'backfill' : 'manual');
   console.log(
-    `[collect] run ${runId} symbol=${SYMBOL} base=${BASE}` +
+    `[collect] run ${runId} symbol=${SYMBOL} kind=${kind} base=${BASE}` +
       (backfill ? ` backfill=${backfill}d` : ''),
   );
+  await reportRun(apiToken, {
+    id: runId,
+    symbol: SYMBOL,
+    kind,
+    status: 'running',
+    finished: false,
+  });
 
   const kisToken = await issueToken(creds);
   const today = kstDay();
@@ -202,6 +233,17 @@ async function main(): Promise<void> {
     }
   }
   console.log(`[collect] posted ${posted}/${queue.length} snapshot(s)`);
+
+  await reportRun(apiToken, {
+    id: runId,
+    symbol: SYMBOL,
+    kind,
+    status: errors.length === 0 ? 'ok' : posted > 0 ? 'partial' : 'error',
+    finished: true,
+    posted,
+    failed: errors.length,
+    error: errors.length ? errors.join('\n').slice(0, 4000) : null,
+  });
 
   if (errors.length) {
     console.error(`[collect] ${errors.length} error(s):`);

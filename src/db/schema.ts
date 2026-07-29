@@ -170,6 +170,57 @@ export const stockAnalysis = pgTable(
   (t) => [index('ix_stock_analysis_symbol_created').on(t.symbol, sql`created_at desc`)],
 );
 
+// Collector run log (운영 모니터링). id는 수집기가 만든 collector_run_id를 그대로 쓴다 —
+// 스냅샷 행과 같은 값이라 "이 실행이 무엇을 남겼나"를 조인 없이 추적할 수 있다.
+export const collectorRuns = pgTable(
+  'collector_runs',
+  {
+    id: uuid('id').primaryKey(),
+    symbol: text('symbol').notNull(),
+    kind: text('kind').notNull().default('close'), // close | premarket | backfill | manual
+    status: text('status').notNull().default('running'), // running | ok | partial | error
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    posted: integer('posted').notNull().default(0),
+    failed: integer('failed').notNull().default(0),
+    error: text('error'),
+  },
+  (t) => [
+    index('ix_collector_runs_started').on(sql`started_at desc`),
+    index('ix_collector_runs_status').on(t.status, sql`started_at desc`),
+  ],
+);
+
+// 결정 → 결과 → 교훈 루프. action의 buy/sell은 **사람이 한 결정의 기록**이지
+// AI 추천이 아니다 (stock_analysis의 정직성 제약과 별개, docs/stock.md 참고).
+export const tradeDecisions = pgTable(
+  'trade_decisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    symbol: text('symbol').notNull(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }).notNull().defaultNow(),
+    action: text('action').notNull(), // buy | sell | hold | watch | skip
+    price: integer('price'),
+    quantity: integer('quantity'),
+    rationale: text('rationale').notNull(),
+    inputSnapshotIds: uuid('input_snapshot_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    analysisId: uuid('analysis_id').references(() => stockAnalysis.id),
+    status: text('status').notNull().default('open'), // open | closed
+    outcomeAt: timestamp('outcome_at', { withTimezone: true }),
+    outcome: text('outcome'),
+    lesson: text('lesson'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ix_trade_decisions_symbol_decided').on(t.symbol, sql`decided_at desc`),
+    index('ix_trade_decisions_status').on(t.status, sql`decided_at desc`),
+  ],
+);
+
 export type EventThread = typeof eventThreads.$inferSelect;
 export type EventVersion = typeof eventVersions.$inferSelect;
 export type NewEventVersion = typeof eventVersions.$inferInsert;
@@ -181,3 +232,7 @@ export type StockSnapshot = typeof stockSnapshots.$inferSelect;
 export type NewStockSnapshot = typeof stockSnapshots.$inferInsert;
 export type StockAnalysis = typeof stockAnalysis.$inferSelect;
 export type NewStockAnalysis = typeof stockAnalysis.$inferInsert;
+export type CollectorRun = typeof collectorRuns.$inferSelect;
+export type NewCollectorRun = typeof collectorRuns.$inferInsert;
+export type TradeDecision = typeof tradeDecisions.$inferSelect;
+export type NewTradeDecision = typeof tradeDecisions.$inferInsert;

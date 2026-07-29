@@ -6,6 +6,10 @@ name: collect-stock
 on:
   schedule:
     - cron: '43 9 * * 1-5' # weekdays, 18:43 KST (off-minute to dodge on-the-hour delays)
+    # Pre-market sweep, 08:10 KST weekdays (23:10 UTC the day before, so Sun-Thu).
+    # Mostly a safety net: it re-posts the previous session if the close run failed,
+    # and captures the morning 외국인 보유비율 as its own bucket.
+    - cron: '10 23 * * 0-4'
   workflow_dispatch: # manual trigger for testing / one-off backfills
     inputs:
       backfill_days:
@@ -39,3 +43,5 @@ jobs:
           JARVIS_BASE_URL: ${{ secrets.JARVIS_BASE_URL }}
           # scheduled runs have no inputs → falls back to 0 (latest day only)
           STOCK_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || '0' }}
+          # which cron fired; empty for manual runs (the collector labels those itself)
+          STOCK_RUN_KIND: ${{ github.event_name == 'schedule' && (github.event.schedule == '10 23 * * 0-4' && 'premarket' || 'close') || '' }}

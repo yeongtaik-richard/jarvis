@@ -172,3 +172,65 @@ export const StockAnalysisQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 export type StockAnalysisQuery = z.infer<typeof StockAnalysisQuery>;
+
+// Collector runs — 수집기가 자기 실행을 보고한다 (운영 모니터링).
+export const CollectorRunKind = z.enum(['close', 'premarket', 'backfill', 'manual']);
+export const CollectorRunStatus = z.enum(['running', 'ok', 'partial', 'error']);
+export const ReportCollectorRunInput = z.object({
+  id: z.string().uuid(), // 스냅샷의 collector_run_id와 동일
+  symbol: z.string().min(1).max(20),
+  kind: CollectorRunKind.default('manual'),
+  status: CollectorRunStatus.default('running'),
+  finished: z.boolean().default(false),
+  posted: z.number().int().min(0).max(100000).default(0),
+  failed: z.number().int().min(0).max(100000).default(0),
+  error: z.string().max(4000).nullish(),
+});
+export type ReportCollectorRunInput = z.infer<typeof ReportCollectorRunInput>;
+
+export const CollectorRunQuery = z.object({
+  symbol: z.string().min(1).max(20).optional(),
+  status: CollectorRunStatus.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type CollectorRunQuery = z.infer<typeof CollectorRunQuery>;
+
+// Trade decisions — 사람이 실제로 한 결정의 기록. AI 추천이 아니다.
+export const TradeAction = z.enum(['buy', 'sell', 'hold', 'watch', 'skip']);
+export const TradeDecisionStatus = z.enum(['open', 'closed']);
+export const CreateTradeDecisionInput = z.object({
+  symbol: z.string().min(1).max(20).default('000660'),
+  decided_at: isoDateTime,
+  action: TradeAction,
+  price: z.number().int().min(0).max(100_000_000).nullish(),
+  quantity: z.number().int().min(0).max(10_000_000).nullish(),
+  rationale: z.string().min(1).max(4000),
+  input_snapshot_ids: z.array(z.string().uuid()).max(50).default([]),
+  analysis_id: z.string().uuid().nullish(),
+});
+export type CreateTradeDecisionInput = z.infer<typeof CreateTradeDecisionInput>;
+
+export const PatchTradeDecisionInput = z
+  .object({
+    status: TradeDecisionStatus.optional(),
+    outcome: z.string().max(4000).nullish(),
+    lesson: z.string().max(4000).nullish(),
+    outcome_at: isoDateTime,
+  })
+  .refine(
+    (v) =>
+      v.status !== undefined ||
+      v.outcome !== undefined ||
+      v.lesson !== undefined ||
+      v.outcome_at !== null,
+    { message: 'nothing to update' },
+  );
+export type PatchTradeDecisionInput = z.infer<typeof PatchTradeDecisionInput>;
+
+export const TradeDecisionQuery = z.object({
+  symbol: z.string().min(1).max(20).optional(),
+  status: TradeDecisionStatus.optional(),
+  action: TradeAction.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+export type TradeDecisionQuery = z.infer<typeof TradeDecisionQuery>;

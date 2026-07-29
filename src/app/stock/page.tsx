@@ -1,4 +1,6 @@
+import Link from 'next/link';
 import { Header } from '@/app/components/Header';
+import { getCollectorHealth } from '@/lib/collector-run-service';
 import { StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
 import {
   searchStockAnalysis,
@@ -192,6 +194,28 @@ function BriefingCard({
 
 const HISTORY_DAYS = 30;
 
+const RUN_KIND_LABEL: Record<string, string> = {
+  close: '마감',
+  premarket: '프리마켓',
+  backfill: '백필',
+  manual: '수동',
+};
+const RUN_STATUS_BADGE: Record<string, string> = {
+  ok: 'bg-emerald-100 text-emerald-800',
+  running: 'bg-blue-100 text-blue-800',
+  partial: 'bg-amber-100 text-amber-800',
+  error: 'bg-rose-100 text-rose-800',
+};
+
+function kstTime(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+}
+
 function payloadNum(payload: unknown, key: string): number {
   const v = Number((payload as Record<string, unknown> | null)?.[key]);
   return Number.isFinite(v) ? v : NaN;
@@ -207,9 +231,10 @@ export default async function StockDashboardPage() {
 
   // 추이 차트용 이력 — 대시보드는 단일 종목이라 최신 스냅샷의 symbol을 따른다.
   const symbol = items[0]?.symbol ?? '000660';
-  const [ohlcvRows, flowRows] = await Promise.all([
+  const [ohlcvRows, flowRows, health] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', HISTORY_DAYS),
     getStockHistory(symbol, 'investor_flow', HISTORY_DAYS),
+    getCollectorHealth(symbol),
   ]);
   const closePoints: ClosePoint[] = ohlcvRows
     .map((r) => ({ date: r.bucketKey, close: payloadNum(r.payload, 'close') }))
@@ -244,7 +269,10 @@ export default async function StockDashboardPage() {
         <div>
           <h1 className="text-xl font-semibold">Stock — 참고정보</h1>
           <p className="text-xs text-zinc-500 mt-1">
-            reference state, not a signal · 예측 아님
+            reference state, not a signal · 예측 아님 ·{' '}
+            <Link href="/stock/decisions" className="underline hover:text-zinc-700">
+              매매 결정 로그
+            </Link>
           </p>
         </div>
 
@@ -258,11 +286,38 @@ export default async function StockDashboardPage() {
                 {agoText(minutesAgo(lastCaptured, now))}
               </span>{' '}
               · {items.length}개 항목
+              {health.last_run && (
+                <>
+                  {' '}
+                  · 최근 실행 {RUN_KIND_LABEL[health.last_run.kind] ?? health.last_run.kind}{' '}
+                  <span
+                    className={`text-xs px-1.5 py-0.5 rounded ${RUN_STATUS_BADGE[health.last_run.status] ?? 'bg-zinc-200 text-zinc-700'}`}
+                  >
+                    {health.last_run.status}
+                  </span>
+                </>
+              )}
             </>
           ) : (
             '아직 수집된 데이터 없음'
           )}
         </div>
+
+        {health.missed && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 p-3 text-sm">
+            <div className="font-medium text-amber-900 dark:text-amber-200">
+              마감 수집이 예정 시각까지 성공하지 못했습니다
+            </div>
+            <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
+              예정 {kstTime(health.expected_close_run_at)} · 마지막 성공{' '}
+              {health.last_ok_run
+                ? `${kstTime(health.last_ok_run.finished_at ?? health.last_ok_run.started_at)} (${Math.round(health.hours_since_ok ?? 0)}시간 전)`
+                : '없음'}
+              {health.last_run?.error ? ` · ${health.last_run.error.slice(0, 160)}` : ''}
+              . KRX 공휴일이면 정상입니다 — 스케줄은 휴장일을 모릅니다.
+            </p>
+          </div>
+        )}
 
         {analyses.length > 0 && (
           <section className="space-y-3">
