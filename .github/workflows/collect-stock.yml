@@ -6,7 +6,12 @@ name: collect-stock
 on:
   schedule:
     - cron: '43 9 * * 1-5' # weekdays, 18:43 KST (off-minute to dodge on-the-hour delays)
-  workflow_dispatch: {} # manual trigger for testing
+  workflow_dispatch: # manual trigger for testing / one-off backfills
+    inputs:
+      backfill_days:
+        description: 'Days of history to collect (0 = latest settled day only)'
+        required: false
+        default: '0'
 
 concurrency:
   group: collect-stock
@@ -32,3 +37,5 @@ jobs:
           KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
           JARVIS_API_TOKEN: ${{ secrets.JARVIS_API_TOKEN }}
           JARVIS_BASE_URL: ${{ secrets.JARVIS_BASE_URL }}
+          # scheduled runs have no inputs → falls back to 0 (latest day only)
+          STOCK_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || '0' }}
