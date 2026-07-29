@@ -6,10 +6,18 @@ import {
   type ApiStockAnalysis,
 } from '@/lib/stock-analysis-service';
 import {
+  getStockHistory,
   searchStockSnapshots,
   toApiStockSnapshot,
   type ApiStockSnapshot,
 } from '@/lib/stock-service';
+import { korQty, moneyMil, won } from './format';
+import {
+  CloseTrendChart,
+  NetFlowChart,
+  type ClosePoint,
+  type FlowPoint,
+} from './TrendCharts';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -28,21 +36,6 @@ function agoText(mins: number): string {
   const h = Math.floor(mins / 60);
   if (h < 24) return `${h}시간 전`;
   return `${Math.floor(h / 24)}일 전`;
-}
-
-const won = (n: number): string => `${Math.round(n).toLocaleString('ko-KR')}원`;
-function korQty(n: number, suffix = ''): string {
-  const a = Math.abs(n);
-  if (a >= 1e8) return `${(n / 1e8).toFixed(2)}억${suffix}`;
-  if (a >= 1e4) return `${Math.round(n / 1e4).toLocaleString('ko-KR')}만${suffix}`;
-  return `${n.toLocaleString('ko-KR')}${suffix}`;
-}
-// 투자자 매매대금은 백만원(million KRW) 단위로 저장됨 → 조/억으로 환산.
-function moneyMil(pbmn: number): string {
-  const a = Math.abs(pbmn);
-  if (a >= 1_000_000) return `${(a / 1_000_000).toFixed(2)}조`;
-  if (a >= 100) return `${Math.round(a / 100).toLocaleString('ko-KR')}억`;
-  return `${Math.round(a).toLocaleString('ko-KR')}백만`;
 }
 
 const METRIC_LABEL: Record<string, string> = {
@@ -139,9 +132,11 @@ function metricRows(item: ApiStockSnapshot): Row[] {
   }));
 }
 
+// 부호 색은 국내 관례 — 빨강=순매수·상승, 파랑=순매도·하락. (emerald/rose는 색각 이상
+// 판별에서 실패해서 갈아탔다. globals.css의 `.viz` 토큰과 같은 규칙.)
 const toneClass: Record<Tone, string> = {
-  pos: 'text-emerald-600 dark:text-emerald-400',
-  neg: 'text-rose-600 dark:text-rose-400',
+  pos: 'text-red-600 dark:text-red-400',
+  neg: 'text-blue-600 dark:text-blue-400',
   neutral: 'text-zinc-700 dark:text-zinc-300',
 };
 
@@ -195,6 +190,13 @@ function BriefingCard({
   );
 }
 
+const HISTORY_DAYS = 30;
+
+function payloadNum(payload: unknown, key: string): number {
+  const v = Number((payload as Record<string, unknown> | null)?.[key]);
+  return Number.isFinite(v) ? v : NaN;
+}
+
 export default async function StockDashboardPage() {
   const query = StockSnapshotQuery.parse({ latest: true, limit: 100 });
   const rows = await searchStockSnapshots(query);
@@ -202,6 +204,33 @@ export default async function StockDashboardPage() {
   const analyses = (
     await searchStockAnalysis(StockAnalysisQuery.parse({ limit: 5 }))
   ).map(toApiStockAnalysis);
+
+  // 추이 차트용 이력 — 대시보드는 단일 종목이라 최신 스냅샷의 symbol을 따른다.
+  const symbol = items[0]?.symbol ?? '000660';
+  const [ohlcvRows, flowRows] = await Promise.all([
+    getStockHistory(symbol, 'daily_ohlcv', HISTORY_DAYS),
+    getStockHistory(symbol, 'investor_flow', HISTORY_DAYS),
+  ]);
+  const closePoints: ClosePoint[] = ohlcvRows
+    .map((r) => ({ date: r.bucketKey, close: payloadNum(r.payload, 'close') }))
+    .filter((p) => Number.isFinite(p.close));
+  const volumes = new Map(
+    ohlcvRows.map((r) => [r.bucketKey, payloadNum(r.payload, 'volume')]),
+  );
+  const flowPoints: FlowPoint[] = flowRows
+    .map((r) => ({
+      date: r.bucketKey,
+      foreign: payloadNum(r.payload, 'foreign_net'),
+      institution: payloadNum(r.payload, 'institution_net'),
+      individual: payloadNum(r.payload, 'individual_net'),
+    }))
+    .filter((p) => [p.foreign, p.institution, p.individual].every(Number.isFinite));
+
+  const firstClose = closePoints[0]?.close;
+  const lastClose = closePoints[closePoints.length - 1]?.close;
+  const periodChange =
+    firstClose && lastClose ? ((lastClose - firstClose) / firstClose) * 100 : null;
+
   const now = Date.now();
   const lastCaptured = items.reduce<string | null>(
     (max, i) => (max && max >= i.captured_at ? max : i.captured_at),
@@ -307,9 +336,122 @@ export default async function StockDashboardPage() {
           </div>
         )}
 
+        {(closePoints.length >= 2 || flowPoints.length >= 2) && (
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+              추이
+            </h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {closePoints.length >= 2 && (
+                <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4">
+                  <div className="flex items-baseline justify-between gap-2 mb-2">
+                    <h3 className="font-medium">
+                      종가{' '}
+                      <span className="text-xs font-normal text-zinc-400">
+                        최근 {closePoints.length}거래일
+                      </span>
+                    </h3>
+                    <div className="text-right">
+                      <div className="font-medium">{won(lastClose!)}</div>
+                      {periodChange !== null && (
+                        <div
+                          className={`text-xs tabular-nums ${periodChange >= 0 ? toneClass.pos : toneClass.neg}`}
+                        >
+                          {periodChange >= 0 ? '+' : ''}
+                          {periodChange.toFixed(2)}% · 기간
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <CloseTrendChart points={closePoints} />
+                  <details className="mt-2 text-sm">
+                    <summary className="cursor-pointer select-none text-xs text-zinc-500">
+                      표로 보기
+                    </summary>
+                    <div className="mt-2 overflow-x-auto">
+                      <table className="w-full text-xs tabular-nums">
+                        <thead className="text-zinc-500">
+                          <tr>
+                            <th className="text-left font-normal py-1">날짜</th>
+                            <th className="text-right font-normal py-1">종가</th>
+                            <th className="text-right font-normal py-1">거래량</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...closePoints].reverse().map((p) => (
+                            <tr
+                              key={p.date}
+                              className="border-t border-zinc-100 dark:border-zinc-900"
+                            >
+                              <td className="py-1">{p.date}</td>
+                              <td className="py-1 text-right">{won(p.close)}</td>
+                              <td className="py-1 text-right">
+                                {Number.isFinite(volumes.get(p.date))
+                                  ? korQty(volumes.get(p.date)!, '주')
+                                  : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                </section>
+              )}
+
+              {flowPoints.length >= 2 && (
+                <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4">
+                  <h3 className="font-medium mb-2">
+                    투자자별 순매수{' '}
+                    <span className="text-xs font-normal text-zinc-400">
+                      최근 {flowPoints.length}거래일
+                    </span>
+                  </h3>
+                  <NetFlowChart points={flowPoints} />
+                  <details className="mt-2 text-sm">
+                    <summary className="cursor-pointer select-none text-xs text-zinc-500">
+                      표로 보기
+                    </summary>
+                    <div className="mt-2 overflow-x-auto">
+                      <table className="w-full text-xs tabular-nums">
+                        <thead className="text-zinc-500">
+                          <tr>
+                            <th className="text-left font-normal py-1">날짜</th>
+                            <th className="text-right font-normal py-1">외국인</th>
+                            <th className="text-right font-normal py-1">기관</th>
+                            <th className="text-right font-normal py-1">개인</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...flowPoints].reverse().map((p) => (
+                            <tr
+                              key={p.date}
+                              className="border-t border-zinc-100 dark:border-zinc-900"
+                            >
+                              <td className="py-1">{p.date}</td>
+                              {[p.foreign, p.institution, p.individual].map((v, idx) => (
+                                <td
+                                  key={idx}
+                                  className={`py-1 text-right ${v === 0 ? '' : v > 0 ? toneClass.pos : toneClass.neg}`}
+                                >
+                                  {v === 0 ? '보합' : `${v > 0 ? '+' : '−'}${moneyMil(v)}`}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                </section>
+              )}
+            </div>
+          </section>
+        )}
+
         <p className="text-[11px] text-zinc-400 pt-2">
           수급은 KIS 투자자별 매매대금(백만원→조/억 환산). 순매수 = 매수 − 매도.
-          일별 마감 후 수집.
+          일별 마감 후 수집. 부호 색은 국내 관례(빨강=순매수·상승, 파랑=순매도·하락).
         </p>
       </main>
     </div>

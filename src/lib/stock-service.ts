@@ -85,6 +85,25 @@ export async function upsertStockSnapshot(
   return row;
 }
 
+/**
+ * One metric's history, oldest-first, for charting. Ordered by bucket_key (the
+ * trading day) rather than captured_at (when we wrote the row) — a re-collected
+ * old bucket must not jump to the end of the series.
+ */
+export async function getStockHistory(
+  symbol: string,
+  metric: string,
+  days: number,
+): Promise<StockSnapshot[]> {
+  const rows = await db
+    .select()
+    .from(stockSnapshots)
+    .where(and(eq(stockSnapshots.symbol, symbol), eq(stockSnapshots.metric, metric)))
+    .orderBy(desc(stockSnapshots.bucketKey))
+    .limit(days);
+  return rows.reverse();
+}
+
 export async function searchStockSnapshots(
   query: StockSnapshotQuery,
 ): Promise<StockSnapshot[]> {

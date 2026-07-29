@@ -45,7 +45,8 @@ Claude 세션 (온디맨드 브리핑)
 | KIS 클라이언트 | `src/lib/kis-marketdata.ts` (읽기전용) |
 | 수집기 | `scripts/collect-stock.ts` |
 | cron | `.github/workflows/collect-stock.yml` |
-| 대시보드 | `src/app/stock/page.tsx` |
+| 대시보드 | `src/app/stock/page.tsx`, `TrendCharts.tsx`(추이 차트), `format.ts` |
+| 차트 색 토큰 | `src/app/globals.css` — `.viz` (라이트/다크) |
 
 ---
 
@@ -150,10 +151,27 @@ Claude 세션 (온디맨드 브리핑)
 ## 대시보드
 
 `src/app/stock/page.tsx` — server component. API를 거치지 않고 서비스
-(`searchStockSnapshots`, `searchStockAnalysis`)를 **직접 호출**한다.
-- 지표별 카드(`metricRows`) + "최신 브리핑" 섹션(`BriefingCard`).
-- 신선도 배지(`freshnessBadge`/`agoText`), 숫자 포맷(`won`/`korQty`/`moneyMil`).
+(`searchStockSnapshots`, `getStockHistory`, `searchStockAnalysis`)를 **직접 호출**한다.
+- 지표별 카드(`metricRows`) + "최신 브리핑" 섹션(`BriefingCard`) + "추이" 섹션.
+- 신선도 배지(`freshnessBadge`/`agoText`), 숫자 포맷은 `src/app/stock/format.ts`
+  (서버 페이지와 클라이언트 차트가 공유).
 - 모바일 우선(폰에서 주로 봄): `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`.
+
+### 추이 차트 (`src/app/stock/TrendCharts.tsx`)
+
+라이브러리 없이 인라인 SVG. 클라이언트 컴포넌트인 이유는 hover/포커스 툴팁 하나뿐이고,
+데이터·표는 서버에서 렌더된다.
+
+- **종가** — 단일 시계열 선. 선은 중립 회색이고 기간 방향 색은 끝점·기간 등락률에만 쓴다.
+- **투자자별 순매수** — 외국인/기관/개인 3단 스몰 멀티플. **셋이 같은 y 스케일**이라
+  서로 비교된다(캡션에 ±스케일 명시). 0선 위=순매수, 아래=순매도.
+- 툴팁은 마크를 가리지 않는 쪽에 붙는다. 한 번 잡으면 그 날짜의 세 값을 다 보여준다.
+  ← → 키로도 이동한다. **툴팁은 보조 수단** — 모든 값은 각 카드의 "표로 보기"에 있다.
+- 부호 색 토큰은 `globals.css`의 `.viz` (라이트/다크 각각). 국내 관례를 따라
+  **빨강=순매수·상승, 파랑=순매도·하락**이고, 카드 텍스트(`toneClass`)도 같은 규칙이다.
+  원래 쓰던 emerald/rose는 색각 이상 판별에서 실패해서(deutan ΔE 5.8, 하한 6) 갈아탔다.
+  현재 쌍은 두 표면 모두 CVD·대비 검사 통과(ΔE 21.6 light / 19.2 dark).
+  **색을 바꾸면 dataviz 스킬의 `validate_palette.js`를 다시 돌릴 것.**
 
 ---
 
@@ -225,10 +243,10 @@ STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
   (2026-06-29~07-29). 이제 추세 계산의 원천 데이터는 있다.
 - **openapi.yaml에 `/api/stock/*` 4개 추가** (v1.2.0) — ChatGPT Actions에서 스냅샷을
   읽고 브리핑을 남길 수 있다.
+- **추이 차트** — 종가 시계열 + 투자자별 순매수 스몰 멀티플(같은 스케일) + 표로 보기.
+  부호 색을 국내 관례(빨강=순매수)로 통일하면서 색각 이상 실패를 걷어냈다.
 
 ### ⬜ 남은 일 (대략 우선순위 순)
-0. **대시보드 시계열 표시** — 데이터는 22일치 쌓였는데 화면은 여전히 최신 1건만 본다.
-   스파크라인/추세(N일 누적 순매수, 종가 추이)를 붙이는 게 백필의 원래 목적.
 1. **자동 브리핑 스케줄** — 지금은 수동 온디맨드. Claude 루틴으로 마감 후 자동 작성.
 2. **`tradeDecisionLog`** — 결정 → 결과 → 교훈 루프 테이블 + UI (제품 개선의 핵심 피드백).
 3. **운영 모니터링** — `collectorRuns` 기록 + staleness/수집 실패 알림 (지금은 실패해도

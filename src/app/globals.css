@@ -24,3 +24,31 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/*
+ * Chart tokens (/stock 추이 차트). 부호 색은 국내 관례 — 빨강=순매수·상승,
+ * 파랑=순매도·하락. emerald/rose 조합은 색각 이상 판별에서 실패해서(deutan ΔE 5.8)
+ * 이 쌍으로 갈았다. 라이트(#ffffff)·다크(#0a0a0a) 두 표면 모두 CVD·대비 검사 통과.
+ * 값을 바꾸면 dataviz validate_palette.js를 다시 돌릴 것.
+ */
+.viz {
+  --viz-surface: #ffffff;
+  --viz-up: #e34948;
+  --viz-down: #2a78d6;
+  --viz-line: #52514e;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
+  --viz-muted: #898781;
+}
+
+@media (prefers-color-scheme: dark) {
+  .viz {
+    --viz-surface: #0a0a0a;
+    --viz-up: #e66767;
+    --viz-down: #3987e5;
+    --viz-line: #c3c2b7;
+    --viz-grid: #2c2c2a;
+    --viz-axis: #383835;
+    --viz-muted: #898781;
+  }
+}
