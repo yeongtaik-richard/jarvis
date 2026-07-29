@@ -1,0 +1,34 @@
+name: collect-stock
+
+# Post-close collection of stock reference info → POST to jarvis API.
+# GitHub cron is UTC and best-effort (can be delayed) — fine for post-close,
+# not for tight intraday. 09:43 UTC = 18:43 KST (after 투자자 flows settle).
+on:
+  schedule:
+    - cron: '43 9 * * 1-5' # weekdays, 18:43 KST (off-minute to dodge on-the-hour delays)
+  workflow_dispatch: {} # manual trigger for testing
+
+concurrency:
+  group: collect-stock
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Collect
+        run: pnpm exec tsx scripts/collect-stock.ts
+        env:
+          KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+          JARVIS_API_TOKEN: ${{ secrets.JARVIS_API_TOKEN }}
+          JARVIS_BASE_URL: ${{ secrets.JARVIS_BASE_URL }}

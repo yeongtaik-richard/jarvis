@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "db:migrate": "dotenv -e .env.local -- tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio",
-    "google:auth": "dotenv -e .env.local -- tsx scripts/google-auth.ts"
+    "google:auth": "dotenv -e .env.local -- tsx scripts/google-auth.ts",
+    "collect:stock": "dotenv -e .env.local -- tsx scripts/collect-stock.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
