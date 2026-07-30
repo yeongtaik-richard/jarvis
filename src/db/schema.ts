@@ -177,7 +177,7 @@ export const collectorRuns = pgTable(
   {
     id: uuid('id').primaryKey(),
     symbol: text('symbol').notNull(),
-    kind: text('kind').notNull().default('close'), // close | premarket | backfill | manual
+    kind: text('kind').notNull().default('close'), // close | premarket | intraday | backfill | manual
     status: text('status').notNull().default('running'), // running | ok | partial | error
     startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
     finishedAt: timestamp('finished_at', { withTimezone: true }),

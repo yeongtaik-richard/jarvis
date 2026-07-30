@@ -256,8 +256,11 @@ components:
             - investor_flow: close, amount_unit='million_krw', {foreign,institution,individual}_{net,buy,sell}
               — 투자자별 매매**대금(백만원 단위)**. 순매수 = 매수 − 매도. 그대로 읽으면 조 단위를 오해하게 되니
               환산해서 말할 것 (1,000,000백만원 = 1조).
-            - daily_ohlcv: open, high, low, close, volume
+            - daily_ohlcv: open, high, low, close, volume — **확정된 일봉만** 저장된다(장중엔 안 쌓임)
             - foreign_holding: price, foreign_ratio(%), foreign_qty
+            - intraday_price: price, change, change_rate, open, high, low, volume,
+              amount_krw(**단위 원** — 수급의 백만원과 다르다), foreign_ratio, foreign_qty.
+              장중(09~15시 KST) 매시 1건이고 bucket_key가 ISO 시각이다. 오늘 장중 얘기는 이걸 봐야 한다.
         bucket_key:       { type: string, description: '멱등 버킷. 일별은 YYYY-MM-DD, 인트라데이는 ISO 시각.' }
         schema_version:   { type: integer }
         trading_date_kst: { type: [string, 'null'], description: 'KRX 거래일 (YYYY-MM-DD)' }
@@ -359,7 +362,7 @@ components:
       properties:
         id:          { type: string, format: uuid }
         symbol:      { type: string }
-        kind:        { type: string, enum: [close, premarket, backfill, manual] }
+        kind:        { type: string, enum: [close, premarket, intraday, backfill, manual] }
         status:      { type: string, enum: [running, ok, partial, error] }
         started_at:  { type: string, format: date-time }
         finished_at: { type: [string, 'null'], format: date-time }

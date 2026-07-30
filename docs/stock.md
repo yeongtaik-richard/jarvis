@@ -70,6 +70,13 @@ Claude 세션 (온디맨드 브리핑)
 | `investor_flow` | `close`, `amount_unit: 'million_krw'`, `{foreign,institution,individual}_{net,buy,sell}` — 투자자별 순매수/매수/매도 **대금(백만원)** |
 | `daily_ohlcv` | `open, high, low, close, volume` |
 | `foreign_holding` | `price, foreign_ratio(%), foreign_qty` |
+| `intraday_price` | `price, change, change_rate, open, high, low, volume, amount_krw, amount_unit: 'krw', foreign_ratio, foreign_qty` |
+
+> ⚠️ **거래대금 단위가 지표마다 다르다.** `investor_flow`는 **백만원**,
+> `intraday_price.amount_krw`는 **원**이다. payload의 `amount_unit`을 보고 환산할 것.
+
+`intraday_price`만 `bucket_key`가 **KST 정시 ISO**(`2026-07-30T13:00+09:00`)다. cron이 늦게
+떠도 "그 시각대 1건"으로 멱등하게 덮어쓰고, 실제 조회 시각은 `as_of_at`에 남는다.
 
 > 수급 대금 단위는 **백만원**이다. 화면에서는 조/억으로 환산해 표시
 > (`page.tsx`의 `moneyMil`). raw 숫자를 그대로 찍으면 1.24조를 1,242,524로
@@ -174,8 +181,12 @@ Claude 세션 (온디맨드 브리핑)
 - `'10 23 * * 0-4'` = **08:10 KST 평일** 프리마켓. 새 지표를 얻는 게 아니라
   **안전망**이다: 마감 수집이 실패했으면 전날 데이터를 다시 채우고, 아침 시점의
   외국인 보유비율을 그날 버킷으로 하나 남긴다.
-- 어느 cron이 떴는지는 `github.event.schedule`로 구분해 `STOCK_RUN_KIND`(close/premarket)로
-  넘긴다. 수동 실행이면 비어 있고, 수집기가 알아서 `backfill`/`manual`로 붙인다.
+- `'0 0-6 * * 1-5'` = **09~15시 KST 매시 평일** 장중 수집. `intraday_price` 1건만 남기고
+  일봉·수급은 건드리지 않는다(장중엔 확정이 아니므로). 장 시간 밖이면 아무것도 안 하고
+  끝난다 — 지연 발화로 15:30 이후에 떠도 쓰레기 데이터가 안 생긴다.
+- 어느 cron이 떴는지는 `github.event.schedule`로 구분해
+  `STOCK_RUN_KIND`(close/premarket/intraday)로 넘긴다. 수동 실행이면 비어 있고,
+  수집기가 알아서 `backfill`/`manual`로 붙인다.
 - `workflow_dispatch`로 수동 트리거 가능.
 - Node `.nvmrc`(20.20.2), pnpm 9.
 - Repo Secrets: `KIS_APP_KEY`, `KIS_APP_SECRET`, `JARVIS_API_TOKEN`,
@@ -204,6 +215,9 @@ Claude 세션 (온디맨드 브리핑)
 
 `missed` 판정: `lastExpectedCloseRun()`이 "이미 지났어야 할 가장 최근 평일 18:43 KST +
 **유예 3시간**"을 구하고, 그 시각 이후 `status='ok'`인 실행이 없으면 참.
+**`kind='intraday'` 실행은 이 계산에서 제외**한다 — 장중 실행은 확정 데이터를 하나도
+만들지 않아서, 세면 장중 성공이 마감 누락을 가려버린다. 프리마켓은 전날 확정분을 다시
+채우는 안전망이라 포함한다.
 유예를 45분으로 뒀다가 2시간 늦게 뜬 실행을 누락으로 오탐해서 늘렸다 — 하루 1회 작업이라
 몇 시간 늦게 알아도 손해가 없고, 지각을 실패로 부르는 알림이 더 해롭다.
 

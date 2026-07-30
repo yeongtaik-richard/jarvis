@@ -44,6 +44,7 @@ const METRIC_LABEL: Record<string, string> = {
   investor_flow: '수급 · 투자자별 순매수',
   daily_ohlcv: '일봉 (OHLCV)',
   foreign_holding: '외국인 보유',
+  intraday_price: '장중 현재가',
 };
 
 type Tone = 'pos' | 'neg' | 'neutral';
@@ -115,6 +116,29 @@ function metricRows(item: ApiStockSnapshot): Row[] {
       },
       { label: '일중 변동폭', value: range === null ? '—' : `${range.toFixed(1)}%` },
       { label: '거래량', value: vol === null ? '—' : korQty(vol, '주') },
+    ];
+  }
+  if (item.metric === 'intraday_price') {
+    const price = num('price');
+    const rate = num('change_rate');
+    const vol = num('volume');
+    // 이 지표의 거래대금만 단위가 원이다 (수급은 백만원) — payload.amount_unit 참고.
+    const amount = num('amount_krw');
+    return [
+      {
+        label: '현재가',
+        value: price === null ? '—' : won(price),
+        tone: rate === null ? undefined : rate >= 0 ? 'pos' : 'neg',
+      },
+      {
+        label: '전일 대비',
+        value: rate === null ? '—' : `${rate >= 0 ? '+' : ''}${rate}%`,
+        tone: rate === null ? undefined : rate >= 0 ? 'pos' : 'neg',
+      },
+      { label: '고가', value: num('high') === null ? '—' : won(num('high')!) },
+      { label: '저가', value: num('low') === null ? '—' : won(num('low')!) },
+      { label: '누적 거래량', value: vol === null ? '—' : korQty(vol, '주') },
+      { label: '누적 거래대금', value: amount === null ? '—' : korQty(amount, '원') },
     ];
   }
   if (item.metric === 'foreign_holding') {

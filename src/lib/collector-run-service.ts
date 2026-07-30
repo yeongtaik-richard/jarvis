@@ -1,4 +1,4 @@
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { collectorRuns, stockSnapshots, type CollectorRun } from '@/db/schema';
 import type { CollectorRunQuery, ReportCollectorRunInput } from './schemas';
@@ -129,10 +129,19 @@ export async function getCollectorHealth(
     .where(eq(collectorRuns.symbol, symbol))
     .orderBy(desc(collectorRuns.startedAt))
     .limit(1);
+  // 인트라데이 실행은 확정 데이터를 하나도 만들지 않으므로 `missed`를 지우면 안 된다
+  // (그걸 세면 장중 실행 성공이 마감 수집 누락을 가려버린다). 프리마켓은 전날 확정분을
+  // 다시 채우는 안전망이라 포함한다.
   const [lastOk] = await db
     .select()
     .from(collectorRuns)
-    .where(and(eq(collectorRuns.symbol, symbol), eq(collectorRuns.status, 'ok')))
+    .where(
+      and(
+        eq(collectorRuns.symbol, symbol),
+        eq(collectorRuns.status, 'ok'),
+        ne(collectorRuns.kind, 'intraday'),
+      ),
+    )
     .orderBy(desc(collectorRuns.startedAt))
     .limit(1);
 

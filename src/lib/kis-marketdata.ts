@@ -151,6 +151,50 @@ export async function dailyCandles(
     }));
 }
 
+export interface Quote {
+  price: number;
+  change: number; // 전일 대비 (원)
+  changeRate: number; // 전일 대비 %
+  open: number;
+  high: number;
+  low: number;
+  volume: number; // 누적 거래량 (주)
+  amountKrw: number; // 누적 거래대금 (원 — investor_flow의 백만원과 단위가 다르다)
+  foreignRatio: number;
+  foreignQty: number;
+}
+
+/**
+ * 장중 스냅샷용 현재가 묶음. `foreignHolding()`과 같은 TR(inquire-price)이지만 장중에
+ * 의미 있는 필드까지 함께 뽑는다.
+ */
+export async function currentQuote(
+  token: string,
+  creds: KisCreds,
+  code: string,
+): Promise<Quote> {
+  const body = await kisGet<{ output?: Record<string, string> }>(
+    token,
+    creds,
+    '/uapi/domestic-stock/v1/quotations/inquire-price',
+    'FHKST01010100',
+    { FID_COND_MRKT_DIV_CODE: 'J', FID_INPUT_ISCD: code },
+  );
+  const o = body.output ?? {};
+  return {
+    price: num(o.stck_prpr),
+    change: num(o.prdy_vrss),
+    changeRate: num(o.prdy_ctrt),
+    open: num(o.stck_oprc),
+    high: num(o.stck_hgpr),
+    low: num(o.stck_lwpr),
+    volume: num(o.acml_vol),
+    amountKrw: num(o.acml_tr_pbmn),
+    foreignRatio: num(o.hts_frgn_ehrt),
+    foreignQty: num(o.frgn_hldn_qty),
+  };
+}
+
 export interface ForeignHolding {
   price: number;
   foreignRatio: number; // 외국인 보유비율 %

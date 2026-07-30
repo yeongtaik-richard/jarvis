@@ -174,7 +174,7 @@ export const StockAnalysisQuery = z.object({
 export type StockAnalysisQuery = z.infer<typeof StockAnalysisQuery>;
 
 // Collector runs — 수집기가 자기 실행을 보고한다 (운영 모니터링).
-export const CollectorRunKind = z.enum(['close', 'premarket', 'backfill', 'manual']);
+export const CollectorRunKind = z.enum(['close', 'premarket', 'intraday', 'backfill', 'manual']);
 export const CollectorRunStatus = z.enum(['running', 'ok', 'partial', 'error']);
 export const ReportCollectorRunInput = z.object({
   id: z.string().uuid(), // 스냅샷의 collector_run_id와 동일

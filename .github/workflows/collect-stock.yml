@@ -10,6 +10,9 @@ on:
     # Mostly a safety net: it re-posts the previous session if the close run failed,
     # and captures the morning 외국인 보유비율 as its own bucket.
     - cron: '10 23 * * 0-4'
+    # Intraday sweep, hourly 09:00-15:00 KST weekdays (00:00-06:00 UTC). Stores a
+    # separate intraday_price metric — never the daily bar, which isn't settled yet.
+    - cron: '0 0-6 * * 1-5'
   workflow_dispatch: # manual trigger for testing / one-off backfills
     inputs:
       backfill_days:
@@ -44,4 +47,4 @@ jobs:
           # scheduled runs have no inputs → falls back to 0 (latest day only)
           STOCK_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || '0' }}
           # which cron fired; empty for manual runs (the collector labels those itself)
-          STOCK_RUN_KIND: ${{ github.event_name == 'schedule' && (github.event.schedule == '10 23 * * 0-4' && 'premarket' || 'close') || '' }}
+          STOCK_RUN_KIND: ${{ github.event_name == 'schedule' && (github.event.schedule == '10 23 * * 0-4' && 'premarket' || (github.event.schedule == '0 0-6 * * 1-5' && 'intraday' || 'close')) || '' }}

@@ -15,6 +15,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
+  currentQuote,
   dailyCandles,
   foreignHolding,
   investorFlows,
@@ -47,6 +48,25 @@ function settledToday(): boolean {
   return new Date(Date.now() + KST).getUTCHours() >= SETTLE_HOUR_KST;
 }
 
+/** 정규장(평일 09:00~15:30 KST) 안인가. 장 밖 인트라데이 수집은 같은 값의 반복일 뿐이다. */
+function marketOpenNow(): boolean {
+  const kst = new Date(Date.now() + KST);
+  const dow = kst.getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  const min = kst.getUTCHours() * 60 + kst.getUTCMinutes();
+  return min >= 9 * 60 && min <= 15 * 60 + 30;
+}
+
+/**
+ * 인트라데이 버킷 = KST 정시(`YYYY-MM-DDTHH:00+09:00`). cron이 늦게 떠도 "그 시각대 1건"으로
+ * 멱등하게 덮어쓴다. 실제 조회 시각은 `as_of_at`에 따로 남기니 정보가 사라지진 않는다.
+ */
+function kstHourBucket(at: Date): string {
+  const kst = new Date(at.getTime() + KST);
+  const hh = String(kst.getUTCHours()).padStart(2, '0');
+  return `${kst.toISOString().slice(0, 10)}T${hh}:00+09:00`;
+}
+
 /**
  * `--backfill[=N]` or STOCK_BACKFILL_DAYS=N → collect N calendar days of history.
  * 0 (default) = latest settled day only, which is what the daily cron wants.
@@ -68,6 +88,7 @@ interface SnapshotInput {
   metric: string;
   bucket_key: string;
   trading_date_kst?: string | null;
+  as_of_at?: string | null;
   collector_run_id: string;
   payload: Record<string, unknown>;
 }
@@ -148,6 +169,48 @@ async function main(): Promise<void> {
     }
     const picked = backfill ? usable.filter((r) => dateOf(r) >= cutoff) : usable.slice(0, 1);
     return picked.reverse();
+  }
+
+  // 인트라데이 실행은 현재가 1건만 남긴다. 일봉·수급은 장중에 확정이 아니라서 어차피
+  // 위 §확정 전 값 규칙에 걸리고, KIS 호출만 낭비된다.
+  if (kind === 'intraday') {
+    try {
+      if (!marketOpenNow()) {
+        console.log('[collect] intraday: 장 시간 밖이라 수집하지 않음');
+      } else {
+        const at = new Date();
+        const q = await currentQuote(kisToken, creds, SYMBOL);
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: 'intraday_price',
+          bucket_key: kstHourBucket(at),
+          trading_date_kst: today.dashed,
+          as_of_at: at.toISOString(),
+          collector_run_id: runId,
+          payload: {
+            price: q.price,
+            change: q.change,
+            change_rate: q.changeRate,
+            open: q.open,
+            high: q.high,
+            low: q.low,
+            volume: q.volume,
+            amount_krw: q.amountKrw,
+            amount_unit: 'krw', // 수급(백만원)과 단위가 다르다 — 섞지 말 것
+            foreign_ratio: q.foreignRatio,
+            foreign_qty: q.foreignQty,
+          },
+        });
+        console.log(
+          `[collect] intraday_price ${kstHourBucket(at)} (${q.price}원, ${q.changeRate}%)`,
+        );
+      }
+    } catch (e) {
+      errors.push(`intraday_price: ${String(e)}`);
+    }
+    await flush(apiToken, runId, kind, queue, errors);
+    return;
   }
 
   // 1) investor flow
@@ -241,7 +304,18 @@ async function main(): Promise<void> {
     errors.push(`foreign_holding: ${String(e)}`);
   }
 
-  // POST oldest-first. A single failed day must not drop the rest of the window.
+  await flush(apiToken, runId, kind, queue, errors);
+}
+
+/** 모아둔 스냅샷을 오래된 순으로 POST하고, 실행 결과를 보고하고, 실패면 non-zero로 끝낸다. */
+async function flush(
+  apiToken: string,
+  runId: string,
+  kind: string,
+  queue: SnapshotInput[],
+  errors: string[],
+): Promise<void> {
+  // 한 날짜가 실패해도 나머지 구간은 계속 올린다.
   let posted = 0;
   for (const snap of queue) {
     try {

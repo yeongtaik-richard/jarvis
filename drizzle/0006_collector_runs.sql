@@ -5,7 +5,7 @@
 create table if not exists collector_runs (
   id          uuid primary key,                 -- 스냅샷의 collector_run_id와 같은 값
   symbol      text not null,
-  kind        text not null default 'close',    -- close | premarket | backfill | manual
+  kind        text not null default 'close',    -- close | premarket | intraday | backfill | manual
   status      text not null default 'running',  -- running | ok | partial | error
   started_at  timestamptz not null default now(),
   finished_at timestamptz,
