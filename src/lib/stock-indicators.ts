@@ -143,6 +143,25 @@ function covar(a: number[], b: number[]): number {
   return mean(a.map((x, i) => (x - ma) * (b[i]! - mb)));
 }
 
+/**
+ * `date` 이하의 가장 최근 세션(as-of). 미국 지수는 KRX와 달력이 달라 — 시차로 KRX '오늘'
+ * 세션이 아직 없고 휴장일도 다르다 — 정확 일치를 요구하면 크로스마켓 비교가 항상 실패한다.
+ * 5일 이상 벌어지면 다른 구간을 비교하는 셈이라 포기한다(연휴보다 긴 갭은 데이터 구멍).
+ */
+function asOf(
+  series: { date: string; close: number }[],
+  date: string,
+): { date: string; close: number } | null {
+  for (let i = series.length - 1; i >= 0; i--) {
+    if (series[i]!.date <= date) {
+      const gap =
+        (Date.parse(date) - Date.parse(series[i]!.date)) / 86_400_000;
+      return gap <= 5 ? series[i]! : null;
+    }
+  }
+  return null;
+}
+
 function excess(
   stock: { date: string; close: number }[],
   bench: { date: string; close: number }[],
@@ -151,9 +170,9 @@ function excess(
   if (stock.length < days + 1) return null;
   const startDate = stock[stock.length - 1 - days]!.date;
   const endDate = stock[stock.length - 1]!.date;
-  const bStart = bench.find((b) => b.date === startDate);
-  const bEnd = bench.find((b) => b.date === endDate);
-  if (!bStart || !bEnd || !bStart.close) return null;
+  const bStart = asOf(bench, startDate);
+  const bEnd = asOf(bench, endDate);
+  if (!bStart || !bEnd || !bStart.close || bStart.date === bEnd.date) return null;
   const s = pctChange(stock, days);
   if (s === null) return null;
   return round(s - (bEnd.close / bStart.close - 1) * 100);
@@ -264,9 +283,11 @@ export function computeIndicators(
           ? (() => {
               const startDate = stock[stock.length - 1 - 20]?.date;
               const endDate = stock[stock.length - 1]?.date;
-              const bs = series.find((x) => x.date === startDate);
-              const be = series.find((x) => x.date === endDate);
-              return bs && be && bs.close ? round((be.close / bs.close - 1) * 100) : null;
+              const bs = startDate ? asOf(series, startDate) : null;
+              const be = endDate ? asOf(series, endDate) : null;
+              return bs && be && bs.close && bs.date !== be.date
+                ? round((be.close / bs.close - 1) * 100)
+                : null;
             })()
           : null;
       return {

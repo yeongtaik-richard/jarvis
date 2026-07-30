@@ -73,6 +73,8 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 | `investor_flow` | `close`, `amount_unit: 'million_krw'`, `{foreign,institution,individual}_{net,buy,sell}` — 투자자별 순매수/매수/매도 **대금(백만원)** |
 | `daily_ohlcv` | `open, high, low, close, volume` |
 | `foreign_holding` | `price, foreign_ratio(%), foreign_qty` |
+| `benchmark_{sox,nasdaq,kospi,electronics,samsung}` | `close, open, high, low, volume` (+`index_code`/`peer_code`) — 상대강도용 벤치마크 |
+| `adr_price` | `ticker, exchange, currency: 'USD', close, open, high, low, volume` — SKHY(NAS). 벤치마크 아님 |
 | `intraday_price` | 가격·거래: `price, change, change_rate, open, high, low, volume, amount_krw, amount_unit: 'krw'` · 수급의 질: `foreign_ratio, foreign_qty, foreign_net_qty, program_net_qty, short_qty, loan_balance_rate` · 플래그: `vi_code, warn_code, short_over_yn, caution_yn` |
 | `valuation` | `per, pbr, eps, bps, market_cap(+`market_cap_unit: 'hundred_million_krw'`), listed_shares, turnover_rate, sector, w52_high/low(+date), d250_high/low` |
 
@@ -261,6 +263,26 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 > ⚠️ **이 라벨은 예측이 아니다.** "하락 추세"는 지금까지 내려왔다는 서술이다. 응답에
 > `disclaimer`를 함께 실어 보내고, 화면·openapi 설명에도 같은 선을 그어놨다.
 > 규칙이 코드에 드러나 있어야 나중에 적중률을 채점할 수 있다(Phase 5의 전제).
+
+### 벤치마크와 오염 (⚠️ 상대강도 해석 규칙)
+
+**하이닉스는 KOSPI·전기전자 지수의 큰 부분이라 그 지수 대비 초과수익은 순환 비교다.**
+2026-07-30 실측(269거래일): 지수 수익률을 종목 수익률로 회귀하면 KOSPI 계수 0.51·R² 0.78,
+전기·전자 0.72·R² 0.86 — KOSPI 일간 변동의 78%가 이 한 종목으로 설명된다. 그래서
+"업종 대비 -7.1%p"는 실제 상대 약세를 크게 축소한 값이었다(같은 날 SOX 대비는 -26.6%p).
+
+- **액면대로 읽어도 되는 벤치마크**: SOX(필라델피아 반도체 — 업황의 상위 동인이자
+  미국 세션이 먼저 끝나 오버나이트 정보), 삼성전자(피어), 나스닥 종합.
+- **오염된 벤치마크(KOSPI·업종)는 지우지 않는다** — 회귀계수 자체가 "지수가 종목에
+  끌려간다"는 정보다. 대신 응답의 `contains_stock`·`index_on_stock_beta`·`index_on_stock_r2`와
+  국면 reasons의 "축소 편향" 단서가 반드시 따라붙는다. 이 단서 없이 인용하지 말 것.
+- 지수에서 종목 기여분을 빼는 정확한 보정은 **불가능**하다 — 지수 응답에 시총 필드가 없어
+  가중치를 모른다. 회귀로 역산하지 않는다(다른 구성종목과의 공분산이 섞임).
+- **크로스마켓 정렬은 as-of**: 미국 지수는 KRX와 달력이 달라(시차·휴장) 정확 일치 매칭이
+  항상 실패한다. "그 날짜 이하 최근 세션"으로 맞추고, 5일 넘게 벌어지면 null.
+- **ADR(SKHY)은 벤치마크가 아니다** — 같은 회사라 초과수익이 정의상 무의미하다.
+  오버나이트 괴리 관찰용이며, 이력 15거래일·BYMD 페이징 불가라는 한계가 있다.
+  KRX 대비 프리미엄 계산은 ADR 비율·환율이 없어 하지 않는다.
 
 ---
 
