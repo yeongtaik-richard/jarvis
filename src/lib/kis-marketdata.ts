@@ -234,6 +234,106 @@ export async function indexDailyRange(
   return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
 }
 
+/**
+ * 해외지수 일별 (FHKST03030100, `FID_COND_MRKT_DIV_CODE='N'`).
+ * 국내 지수와 **필드명이 또 다르다** (`ovrs_nmix_*`). 확인된 코드: `SOX`(필라델피아
+ * 반도체지수), `COMP`(나스닥 종합). `.SOX`/`SOXX`는 빈 응답이라 쓰지 말 것.
+ * 한 번에 100건 상한. 반환은 최신순.
+ */
+export async function overseasIndexDaily(
+  token: string,
+  creds: KisCreds,
+  code: string,
+  start: string,
+  end: string,
+): Promise<IndexBar[]> {
+  const body = await kisGet<{ output2?: Record<string, string>[] }>(
+    token,
+    creds,
+    '/uapi/overseas-price/v1/quotations/inquire-daily-chartprice',
+    'FHKST03030100',
+    {
+      FID_COND_MRKT_DIV_CODE: 'N',
+      FID_INPUT_ISCD: code,
+      FID_INPUT_DATE_1: start,
+      FID_INPUT_DATE_2: end,
+      FID_PERIOD_DIV_CODE: 'D',
+    },
+  );
+  return (body.output2 ?? [])
+    .filter((o) => o.stck_bsop_date)
+    .map((o) => ({
+      date: o.stck_bsop_date ?? '',
+      close: num(o.ovrs_nmix_prpr),
+      open: num(o.ovrs_nmix_oprc),
+      high: num(o.ovrs_nmix_hgpr),
+      low: num(o.ovrs_nmix_lwpr),
+      volume: num(o.acml_vol),
+    }));
+}
+
+/** 해외지수도 창을 밀며 받는다 (100건 상한). */
+export async function overseasIndexDailyRange(
+  token: string,
+  creds: KisCreds,
+  code: string,
+  start: string,
+  end: string,
+  opts: { maxCalls?: number; delayMs?: number } = {},
+): Promise<IndexBar[]> {
+  const maxCalls = opts.maxCalls ?? 12;
+  const delayMs = opts.delayMs ?? 250;
+  const byDate = new Map<string, IndexBar>();
+  let cursor = end;
+  for (let i = 0; i < maxCalls; i++) {
+    const page = await overseasIndexDaily(token, creds, code, start, cursor);
+    if (!page.length) break;
+    const before = byDate.size;
+    for (const b of page) byDate.set(b.date, b);
+    if (byDate.size === before) break;
+    const earliest = page.reduce((min, b) => (b.date < min ? b.date : min), page[0]!.date);
+    if (earliest <= start) break;
+    cursor = prevYmd(earliest);
+    if (cursor < start) break;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
+}
+
+/**
+ * 해외주식 일별 (HHDFS76240000). SK하이닉스 ADR은 `EXCD='NAS', SYMB='SKHY'`.
+ *
+ * 두 가지 한계를 알고 써야 한다:
+ * - **이력이 짧다.** 2026-07-30 확인 시 SKHY는 15거래일만 온다.
+ * - **`BYMD`로 과거를 더 못 긁는다.** BYMD는 '그 날짜 기준 1건'을 주는 as-of 파라미터라
+ *   창을 밀며 받는 방식이 통하지 않는다.
+ * 반환은 최신순.
+ */
+export async function overseasStockDaily(
+  token: string,
+  creds: KisCreds,
+  excd: string,
+  symb: string,
+): Promise<DailyBar[]> {
+  const body = await kisGet<{ output2?: Record<string, string>[] }>(
+    token,
+    creds,
+    '/uapi/overseas-price/v1/quotations/dailyprice',
+    'HHDFS76240000',
+    { AUTH: '', EXCD: excd, SYMB: symb, GUBN: '0', BYMD: '', MODP: '0' },
+  );
+  return (body.output2 ?? [])
+    .filter((o) => o.xymd)
+    .map((o) => ({
+      date: o.xymd ?? '',
+      open: num(o.open),
+      high: num(o.high),
+      low: num(o.low),
+      close: num(o.clos),
+      volume: num(o.tvol),
+    }));
+}
+
 /** `YYYYMMDD` 하루 전. 문자열 날짜 계산을 Date로 왕복시키지 않기 위한 헬퍼. */
 function prevYmd(ymd: string): string {
   const d = new Date(

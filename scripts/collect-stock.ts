@@ -26,6 +26,9 @@ import {
   INDEX_CODES,
   indexDaily,
   indexDailyRange,
+  overseasIndexDaily,
+  overseasIndexDailyRange,
+  overseasStockDaily,
   foreignHolding,
   investorFlows,
   issueToken,
@@ -40,6 +43,9 @@ const KST = 9 * 3600 * 1000;
 // corpCode.xml에서 확인). 종목을 바꾸면 이 둘도 같이 바꿔야 한다.
 const CORP_CODE = process.env.DART_CORP_CODE ?? '00164779';
 const NEWS_QUERY = process.env.NEWS_QUERY ?? 'SK하이닉스';
+// 피어 종목(삼성전자)과 ADR. 종목이 안 들어간 벤치마크라 상대강도를 액면대로 읽을 수 있다.
+const PEER_CODE = process.env.PEER_CODE ?? '005930';
+const ADR = { excd: process.env.ADR_EXCD ?? 'NAS', symb: process.env.ADR_SYMB ?? 'SKHY' };
 
 function ymd(kisDate: string): string {
   return `${kisDate.slice(0, 4)}-${kisDate.slice(4, 6)}-${kisDate.slice(6, 8)}`;
@@ -449,6 +455,97 @@ async function main(): Promise<void> {
     } catch (e) {
       errors.push(`benchmark_${key}: ${String(e)}`);
     }
+  }
+
+  // 2c) 종목이 포함되지 않은 벤치마크 — 이쪽이 상대강도의 본론이다.
+  //     SOX는 미국 세션이 KRX보다 한 박자 늦게 끝나므로 최신 행이 곧 오버나이트 정보다.
+  for (const [key, code] of [
+    ['sox', 'SOX'],
+    ['nasdaq', 'COMP'],
+  ] as const) {
+    try {
+      const start = kstDay(Math.max(backfill, 15)).compact;
+      const rows = backfill
+        ? await overseasIndexDailyRange(kisToken, creds, code, start, today.compact, {
+            maxCalls: Math.min(20, Math.ceil(backfill / 100) + 2),
+          })
+        : await overseasIndexDaily(kisToken, creds, code, start, today.compact);
+      // 해외 세션은 KRX 기준 '오늘'이 아직 끝나지 않았을 수 있어 오늘 날짜 행은 버린다.
+      const usable = rows.filter((r) => ymd(r.date) < today.dashed);
+      const picked = backfill ? usable.slice().reverse() : usable.slice(0, 1).reverse();
+      for (const r of picked) {
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: `benchmark_${key}`,
+          bucket_key: ymd(r.date),
+          trading_date_kst: ymd(r.date),
+          collector_run_id: runId,
+          payload: { index_code: code, close: r.close, open: r.open, high: r.high, low: r.low, volume: r.volume },
+        });
+      }
+      if (picked.length) {
+        console.log(`[collect] benchmark_${key} ${picked.length} day(s): ${ymd(picked[0]!.date)}..${ymd(picked.at(-1)!.date)}`);
+      }
+    } catch (e) {
+      errors.push(`benchmark_${key}: ${String(e)}`);
+    }
+  }
+
+  // 2d) 피어(삼성전자). 종목 일봉 TR을 그대로 쓴다.
+  try {
+    const start = kstDay(Math.max(backfill, 15)).compact;
+    const bars = backfill
+      ? await dailyCandlesRange(kisToken, creds, PEER_CODE, start, today.compact, {
+          maxCalls: Math.min(20, Math.ceil(backfill / 100) + 2),
+        })
+      : await dailyCandles(kisToken, creds, PEER_CODE, start, today.compact);
+    const picked = pickWindow(bars, (b) => ymd(b.date), 'benchmark_samsung');
+    for (const b of picked) {
+      queue.push({
+        symbol: SYMBOL,
+        source: 'kis',
+        metric: 'benchmark_samsung',
+        bucket_key: ymd(b.date),
+        trading_date_kst: ymd(b.date),
+        collector_run_id: runId,
+        payload: { peer_code: PEER_CODE, close: b.close, open: b.open, high: b.high, low: b.low, volume: b.volume },
+      });
+    }
+    if (picked.length) {
+      console.log(`[collect] benchmark_samsung ${picked.length} day(s): ${ymd(picked[0]!.date)}..${ymd(picked.at(-1)!.date)}`);
+    }
+  } catch (e) {
+    errors.push(`benchmark_samsung: ${String(e)}`);
+  }
+
+  // 2e) ADR. 벤치마크가 아니라 **같은 회사의 다른 세션**이다 — 초과수익 비교 대상이 아니고,
+  //     오버나이트 괴리를 보는 용도다. 이력이 15거래일뿐이고 BYMD 페이징이 안 된다.
+  try {
+    const rows = await overseasStockDaily(kisToken, creds, ADR.excd, ADR.symb);
+    const usable = rows.filter((r) => ymd(r.date) < today.dashed);
+    const picked = (backfill ? usable.slice() : usable.slice(0, 1)).reverse();
+    for (const r of picked) {
+      queue.push({
+        symbol: SYMBOL,
+        source: 'kis',
+        metric: 'adr_price',
+        bucket_key: ymd(r.date),
+        trading_date_kst: ymd(r.date),
+        collector_run_id: runId,
+        payload: {
+          ticker: ADR.symb,
+          exchange: ADR.excd,
+          currency: 'USD',
+          close: r.close, open: r.open, high: r.high, low: r.low, volume: r.volume,
+        },
+      });
+    }
+    if (picked.length) {
+      console.log(`[collect] adr_price ${picked.length} day(s): ${ymd(picked[0]!.date)}..${ymd(picked.at(-1)!.date)}`);
+    }
+  } catch (e) {
+    errors.push(`adr_price: ${String(e)}`);
   }
 
   // 3) foreign holding — snapshot of *now*; this TR carries no history, so even

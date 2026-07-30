@@ -9,10 +9,26 @@ import {
   type Regime,
 } from './stock-indicators';
 
-/** 수집기의 `benchmark_*` metric과 화면 라벨의 대응. 코드는 kis-marketdata의 INDEX_CODES. */
-const BENCHMARKS: { metric: string; key: string; label: string }[] = [
-  { metric: 'benchmark_kospi', key: 'kospi', label: 'KOSPI' },
-  { metric: 'benchmark_electronics', key: 'electronics', label: '전기·전자 업종' },
+/**
+ * 수집기의 `benchmark_*` metric ↔ 화면 라벨.
+ *
+ * `containsStock`이 핵심이다. 하이닉스는 KOSPI·전기전자 지수에서 비중이 커서
+ * (2026-07-30 실측: 지수를 종목으로 회귀했을 때 KOSPI 계수 0.51·R² 0.78,
+ * 전기·전자 0.72·R² 0.86) 그 지수 대비 초과수익은 자기 자신을 뺀 나머지와 비교하는
+ * 셈이라 **축소 편향**된다. 액면대로 읽을 수 있는 건 종목이 안 들어간 SOX·삼성전자·나스닥뿐.
+ * 오염된 벤치마크도 지우지 않고 남긴다 — 회귀계수 자체가 "지수가 종목에 끌려간다"는 정보다.
+ */
+const BENCHMARKS: {
+  metric: string;
+  key: string;
+  label: string;
+  containsStock: boolean;
+}[] = [
+  { metric: 'benchmark_sox', key: 'sox', label: '필라델피아 반도체(SOX)', containsStock: false },
+  { metric: 'benchmark_samsung', key: 'samsung', label: '삼성전자', containsStock: false },
+  { metric: 'benchmark_nasdaq', key: 'nasdaq', label: '나스닥 종합', containsStock: false },
+  { metric: 'benchmark_kospi', key: 'kospi', label: 'KOSPI', containsStock: true },
+  { metric: 'benchmark_electronics', key: 'electronics', label: '전기·전자 업종', containsStock: true },
 ];
 
 export type RegimeResult = {
@@ -61,6 +77,7 @@ export async function getStockRegime(symbol: string, days = 300): Promise<Regime
   const benchmarks: BenchmarkSeries[] = BENCHMARKS.map((b, i) => ({
     key: b.key,
     label: b.label,
+    containsStock: b.containsStock,
     bars: (benchRows[i] ?? [])
       .map((r) => ({ date: r.bucketKey, close: num(r.payload, 'close') }))
       .filter((x) => Number.isFinite(x.close)),

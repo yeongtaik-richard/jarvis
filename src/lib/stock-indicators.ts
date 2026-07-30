@@ -15,22 +15,37 @@ export interface Bar {
   volume: number;
 }
 
-/** 벤치마크(지수) 종가 시계열. 종목과 같은 거래일 축을 쓴다. */
+/** 벤치마크 종가 시계열. 종목과 같은 거래일 축을 쓴다. */
 export interface BenchmarkSeries {
-  key: string; // 'kospi' | 'electronics' ...
+  key: string; // 'sox' | 'samsung' | 'kospi' ...
   label: string;
   bars: { date: string; close: number }[];
+  /**
+   * 벤치마크 구성에 **종목 자신이 들어가는가.** KOSPI·업종지수는 하이닉스 비중이 커서
+   * 지수가 종목 때문에 움직인다 → 초과수익이 축소 편향된다. SOX·삼성전자처럼 종목이
+   * 안 들어간 벤치마크만 상대강도를 액면대로 읽을 수 있다.
+   */
+  containsStock: boolean;
 }
 
 export interface RelativeStrength {
   key: string;
   label: string;
-  /** 종목 수익률 − 벤치마크 수익률 (%p). 양수면 시장보다 덜 빠지거나 더 올랐다. */
+  contains_stock: boolean;
+  /** 종목 수익률 − 벤치마크 수익률 (%p). 양수면 벤치마크보다 덜 빠지거나 더 올랐다. */
   excess_5d: number | null;
   excess_20d: number | null;
   excess_60d: number | null;
   stock_20d_pct: number | null;
   benchmark_20d_pct: number | null;
+  /**
+   * **벤치마크를 종목으로 회귀**한 계수와 R². 순환 정도를 수치로 드러내려고 같이 준다.
+   * 2026-07-30 실측: KOSPI 0.51/R² 0.78, 전기·전자 0.72/R² 0.86 —
+   * 즉 KOSPI 일간 변동의 78%가 하이닉스 하나로 설명된다.
+   */
+  index_on_stock_beta: number | null;
+  index_on_stock_r2: number | null;
+  overlap_days: number;
 }
 
 export interface Flow {
@@ -98,6 +113,34 @@ function pctChange(series: { date: string; close: number }[], days: number): num
   const to = series[series.length - 1]!;
   if (!from.close) return null;
   return (to.close / from.close - 1) * 100;
+}
+
+/** 두 시계열의 공통 거래일에서 일간 수익률 쌍을 만든다. */
+function alignedReturns(
+  a: { date: string; close: number }[],
+  b: { date: string; close: number }[],
+): { ra: number[]; rb: number[] } {
+  const mb = new Map(b.map((x) => [x.date, x.close]));
+  const dates = a.filter((x) => mb.has(x.date)).map((x) => x.date);
+  const ma = new Map(a.map((x) => [x.date, x.close]));
+  const ra: number[] = [];
+  const rb: number[] = [];
+  for (let i = 1; i < dates.length; i++) {
+    const p0 = ma.get(dates[i - 1]!)!;
+    const p1 = ma.get(dates[i]!)!;
+    const q0 = mb.get(dates[i - 1]!)!;
+    const q1 = mb.get(dates[i]!)!;
+    if (!p0 || !q0) continue;
+    ra.push(p1 / p0 - 1);
+    rb.push(q1 / q0 - 1);
+  }
+  return { ra, rb };
+}
+
+function covar(a: number[], b: number[]): number {
+  const ma = mean(a);
+  const mb = mean(b);
+  return mean(a.map((x, i) => (x - ma) * (b[i]! - mb)));
 }
 
 function excess(
@@ -206,6 +249,15 @@ export function computeIndicators(
     relative: benchmarks.map((b) => {
       const series = [...b.bars].sort((x, y) => x.date.localeCompare(y.date));
       const stock = bars.map((x) => ({ date: x.date, close: x.close }));
+      // 순환 정도: 벤치마크 수익률을 종목 수익률로 회귀한다.
+      const { ra: rStock, rb: rBench } = alignedReturns(stock, series);
+      let beta: number | null = null;
+      let r2: number | null = null;
+      if (rStock.length >= 30 && covar(rStock, rStock) > 0) {
+        beta = round(covar(rBench, rStock) / covar(rStock, rStock), 3);
+        const denom = Math.sqrt(covar(rStock, rStock) * covar(rBench, rBench));
+        if (denom > 0) r2 = round((covar(rStock, rBench) / denom) ** 2, 3);
+      }
       const s20 = pctChange(stock, 20);
       const b20 =
         series.length && s20 !== null
@@ -220,11 +272,15 @@ export function computeIndicators(
       return {
         key: b.key,
         label: b.label,
+        contains_stock: b.containsStock,
         excess_5d: excess(stock, series, 5),
         excess_20d: excess(stock, series, 20),
         excess_60d: excess(stock, series, 60),
         stock_20d_pct: s20 === null ? null : round(s20),
         benchmark_20d_pct: b20,
+        index_on_stock_beta: beta,
+        index_on_stock_r2: r2,
+        overlap_days: rStock.length,
       };
     }),
   };
@@ -333,13 +389,18 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
   if (ind.volume_ratio !== null) {
     reasons.push(`최근 5일 거래량이 60일 평균의 ${ind.volume_ratio}배`);
   }
-  for (const r of ind.relative) {
+  // 종목이 안 들어간 벤치마크를 먼저 보여준다 — 이쪽이 액면대로 읽을 수 있는 값이다.
+  for (const r of [...ind.relative].sort((a, b) => Number(a.contains_stock) - Number(b.contains_stock))) {
     if (r.excess_20d === null) continue;
-    // 시장이 빠진 건지 이 종목이 빠진 건지 — 벤치마크 없이는 답할 수 없던 질문.
-    reasons.push(
-      `${r.label} 대비 20일 초과수익 ${r.excess_20d > 0 ? '+' : ''}${r.excess_20d}%p ` +
-        `(종목 ${r.stock_20d_pct}% vs 지수 ${r.benchmark_20d_pct}%)`,
-    );
+    const base = `${r.label} 대비 20일 초과수익 ${r.excess_20d > 0 ? '+' : ''}${r.excess_20d}%p (종목 ${r.stock_20d_pct}% vs ${r.benchmark_20d_pct}%)`;
+    if (r.contains_stock && r.index_on_stock_r2 !== null) {
+      // 순환 비교라는 사실을 숫자와 함께 붙인다. 이 문구 없이 인용되면 오독된다.
+      reasons.push(
+        `${base} — 단, 이 지수는 종목을 포함한다(지수를 종목으로 회귀: 계수 ${r.index_on_stock_beta}, R² ${r.index_on_stock_r2}) → 초과수익이 축소 편향`,
+      );
+    } else {
+      reasons.push(base);
+    }
   }
 
   const parts = [TREND_LABEL[trend]];
