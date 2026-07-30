@@ -151,6 +151,56 @@ export async function dailyCandles(
     }));
 }
 
+/** `YYYYMMDD` 하루 전. 문자열 날짜 계산을 Date로 왕복시키지 않기 위한 헬퍼. */
+function prevYmd(ymd: string): string {
+  const d = new Date(
+    Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(4, 6)) - 1, Number(ymd.slice(6, 8))),
+  );
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+/**
+ * 일봉을 여러 번 나눠 받아 긴 구간을 채운다.
+ *
+ * `dailyCandles`(FHKST03010100)는 **요청 구간과 무관하게 최신 100건만** 준다
+ * (19개월을 요청해도 100건, 확인됨). 그래서 받은 것 중 가장 오래된 날짜의 하루 전으로
+ * `end`를 밀어가며 반복한다. 새 데이터가 안 오면 상장 이래 끝에 닿은 것으로 보고 멈춘다.
+ *
+ * KIS 초당 호출 제한이 있어 창 사이에 `delayMs`만큼 쉰다. 반환은 기존 계약대로 **최신순**.
+ */
+export async function dailyCandlesRange(
+  token: string,
+  creds: KisCreds,
+  code: string,
+  start: string,
+  end: string,
+  opts: { maxCalls?: number; delayMs?: number } = {},
+): Promise<DailyBar[]> {
+  const maxCalls = opts.maxCalls ?? 12;
+  const delayMs = opts.delayMs ?? 250;
+  const byDate = new Map<string, DailyBar>();
+  let cursor = end;
+
+  for (let i = 0; i < maxCalls; i++) {
+    const page = await dailyCandles(token, creds, code, start, cursor);
+    if (!page.length) break;
+
+    const before = byDate.size;
+    for (const b of page) byDate.set(b.date, b);
+    // 같은 창을 다시 받은 셈이면(새 날짜 0건) 더 뒤로 갈 데이터가 없다.
+    if (byDate.size === before) break;
+
+    const earliest = page.reduce((min, b) => (b.date < min ? b.date : min), page[0]!.date);
+    if (earliest <= start) break;
+    cursor = prevYmd(earliest);
+    if (cursor < start) break;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+
+  return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
+}
+
 export interface Quote {
   price: number;
   change: number; // 전일 대비 (원)

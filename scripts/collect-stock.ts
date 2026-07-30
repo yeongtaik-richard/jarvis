@@ -12,11 +12,17 @@
  * the dashboard has history to trend over. Upsert is idempotent on
  * (symbol, source, metric, bucket_key), so re-running is safe. Days are posted
  * oldest-first, keeping captured_at monotonic with the trading date.
+ *
+ * 긴 백필은 `dailyCandlesRange`가 창을 나눠 받는다 (KIS 일봉은 한 번에 100건 상한).
+ * **`investor_flow`는 KIS가 30일치만 주므로** 백필을 길게 잡아도 수급은 그만큼만 늘어난다.
+ * 오래 걸리고 POST가 수백 건이라 GitHub Actions에서 돌리는 게 안전하다:
+ *   gh workflow run collect-stock.yml -f backfill_days=400
  */
 import { randomUUID } from 'node:crypto';
 import {
   currentQuote,
   dailyCandles,
+  dailyCandlesRange,
   foreignHolding,
   investorFlows,
   issueToken,
@@ -83,8 +89,9 @@ function backfillDays(): number {
   const raw = arg ? (arg.split('=')[1] ?? '30') : (process.env.STOCK_BACKFILL_DAYS ?? '0');
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) throw new Error(`invalid backfill days: ${raw}`);
-  // KIS caps how far back these TRs reach anyway; the ceiling just guards typos.
-  return Math.min(Math.floor(n), 120);
+  // 상한은 오타 방지용이다. 실제 한계는 KIS가 어디까지 주는지로 결정되고,
+  // 페이지네이션 루프가 새 데이터가 없으면 스스로 멈춘다.
+  return Math.min(Math.floor(n), 1500);
 }
 
 interface SnapshotInput {
@@ -365,7 +372,12 @@ async function main(): Promise<void> {
   // 2) daily OHLCV
   try {
     const start = kstDay(Math.max(backfill, 15)).compact;
-    const bars = await dailyCandles(kisToken, creds, SYMBOL, start, today.compact);
+    // 한 번 호출은 100건 상한이라, 백필일 때만 창을 나눠 받는다.
+    const bars = backfill
+      ? await dailyCandlesRange(kisToken, creds, SYMBOL, start, today.compact, {
+          maxCalls: Math.min(20, Math.ceil(backfill / 100) + 2),
+        })
+      : await dailyCandles(kisToken, creds, SYMBOL, start, today.compact);
     const picked = pickWindow(bars, (b) => ymd(b.date), 'daily_ohlcv');
     if (!picked.length) errors.push('daily_ohlcv: no bars');
     for (const b of picked) {
