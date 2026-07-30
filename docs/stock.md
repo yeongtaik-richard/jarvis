@@ -122,6 +122,18 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 - **호재·악재 라벨이나 인과 해석은 저장하지 않는다.** 사건의 존재와 시각까지가 사실이고,
   인과는 검증 대상이다. 대시보드 문구·openapi 설명에도 같은 선을 그어놨다.
 
+### `stock_predictions` — 예측 기록 + 자동 채점
+- 브리핑의 "지켜볼 것"을 **기계가 채점 가능한 조건**으로 기록한다:
+  `metric.field가 target_bucket에서 comparator threshold`. 한 행 = 반증 가능한 주장 하나.
+- **사후 예측 차단**: 등록 시점에 대상 버킷의 스냅샷이 이미 있으면 **409**. 이 검사가
+  없으면 지나간 데이터를 맞히는 가짜 적중률이 쌓여 채점 전체가 무의미해진다.
+- **조회가 곧 채점이다.** 별도 cron 없이, `GET /api/stock/prediction`이 pending 중
+  데이터가 도착한 것을 정산한다(멱등). 스냅샷 있으면 confirmed/refuted, 필드가 없으면
+  unverifiable, 대상 날짜 +3일 유예까지 데이터가 안 오면 expired(휴장일 등).
+- `kind`: `watch`(관찰 항목)만 쓴다. `directional`은 스키마에 있지만 **적중률 통계가
+  쌓이기 전까지 금지** — §정직성 규칙의 해금 전제조건이 바로 이 테이블의 통계다.
+- `/api/stock/prediction/stats`: hit_rate는 반드시 scored(표본 수)와 함께 인용할 것.
+
 ### `trade_decisions` — 결정 → 결과 → 교훈
 - **사람이 실제로 한 결정의 기록**이다. 여기 `action`(buy/sell/…)이 있다고 해서 위 정직성
   규칙이 풀린 게 아니다: AI는 무엇을 살지 제안하지 않고, 사용자가 이미 한 행동을 받아적을
@@ -153,11 +165,13 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 | GET | `/api/stock/collector-run` | 실행 이력. `symbol/status` 필터 |
 | GET | `/api/stock/health` | 수집 생존 요약 — `missed`, 마지막 성공, 지표별 최신 버킷 |
 | GET | `/api/stock/regime` | 지표 + 규칙 기반 국면. 저장 안 하고 매번 계산 |
+| POST/GET | `/api/stock/prediction` | 예측 등록(사후면 409) / 목록(조회=채점) |
+| GET | `/api/stock/prediction/stats` | 적중률 요약 |
 | POST/GET | `/api/stock/event` | 공시·뉴스 upsert(배열 허용, **수집기 전용**) / 조회 |
 | POST/GET | `/api/stock/decision` | 매매 결정 기록/목록 |
 | GET/PATCH | `/api/stock/decision/{id}` | 단건 / 결과·교훈 붙이기 |
 
-`public/openapi.yaml`(v1.5.0)에 문서화돼 있다. 예외는 **수집기 전용 쓰기 두 개** —
+`public/openapi.yaml`(v1.6.0)에 문서화돼 있다. 예외는 **수집기 전용 쓰기 두 개** —
 `POST /api/stock/collector-run`과 `POST /api/stock/event`는 모델이 만들 데이터가 아니라
 스펙에서 뺐다(읽기 GET은 있다).
 
@@ -464,15 +478,19 @@ STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
 - **공시·뉴스** — `market_events` + OpenDART/구글 뉴스 RSS.
 - **일봉 페이지네이션 + 장기 백필** — 269거래일(2025-06-25~) 적재. 수급은 KIS 30일 상한.
 - **지표·국면 라벨** — MA60/120·변동성 백분위·국면 분류 + `/api/stock/regime`.
+- **벤치마크 재설계** — SOX·삼성전자·나스닥(비오염) + KOSPI·업종(오염 표기, §벤치마크와 오염).
+- **ADR 수집** — `adr_price`(NAS/SKHY). 벤치마크 아님, 오버나이트 괴리 관찰용.
+- **예측 기록·자동 채점** — `stock_predictions` + 사후 차단 + 조회 시 채점 + 적중률 통계.
+  루틴이 매시 "지켜볼 것"을 구조화 등록하고 다음 시간에 채점 결과를 인용한다.
 - **자동 브리핑 루틴** — Claude 클라우드 루틴 + 브리핑 전용 토큰 (§자동 브리핑 루틴).
 
 ### ⬜ 남은 일 (대략 우선순위 순)
-1. **KRX 휴장일 캘린더** — `missed` 공휴일 오탐 제거.
-2. **수집 항목 확대** — KRX 연기금 세분·이력, DART 5%+ 대주주, SOX/글로벌 오버나이트 갭.
-3. **장중 하이브리드 심화** — 지금은 매시 스냅샷 + 매시 브리핑까지다. 초·분 단위
-   실시간이 필요해지면 cron으로는 안 되고 상시 프로세스 호스팅이 필요 (아래 열린 결정).
-4. **방향성 지표 + 적중률 검증** — §12의 `validated_directional`을 해금하는 전제조건.
-   검증 통계 없이는 방향성 주장 금지. 이후 다종목 확장.
+1. **적중률 표본 쌓기 → `validated_directional` 해금 판단** — 채점 기계는 완성됐다.
+   이제 루틴이 매시 watch 예측을 등록·채점하며 표본이 쌓인다. 표본이 유의미해지면
+   (수십 건 이상) 그 통계를 근거로 방향성 신호(Phase 6)를 열지 결정한다 — 리처드님 결정.
+2. **KRX 휴장일 캘린더** — `missed` 공휴일 오탐 + 예측 expired 오탐 제거.
+3. **수집 항목 확대** — KRX 연기금 세분·이력, DART 5%+ 대주주.
+4. **장중 하이브리드 심화** — 초·분 단위 실시간이 필요해지면 상시 프로세스 호스팅 필요.
 
 ### 열린 결정
 - **실시간 시세 호스팅** — 장중 실시간이 필요해지면 GitHub Actions cron으로 불가,

@@ -3,6 +3,8 @@ import { Header } from '@/app/components/Header';
 import { getCollectorHealth } from '@/lib/collector-run-service';
 import { searchMarketEvents, toApiMarketEvent } from '@/lib/market-event-service';
 import { getStockRegime } from '@/lib/stock-regime-service';
+import { predictionStats, searchPredictions, toApiPrediction } from '@/lib/prediction-service';
+import { PredictionQuery } from '@/lib/schemas';
 import { MarketEventQuery, StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
 import {
   searchStockAnalysis,
@@ -332,6 +334,21 @@ const FLOW_BADGE: Record<string, string> = {
   unknown: 'bg-zinc-200 text-zinc-700',
 };
 
+const PRED_TEXT: Record<string, string> = {
+  pending: '대기',
+  confirmed: '확인됨',
+  refuted: '빗나감',
+  expired: '만료',
+  unverifiable: '검증 불가',
+};
+const PRED_BADGE: Record<string, string> = {
+  pending: 'bg-zinc-200 text-zinc-700',
+  confirmed: 'bg-emerald-100 text-emerald-800',
+  refuted: 'bg-rose-100 text-rose-800',
+  expired: 'bg-zinc-200 text-zinc-500',
+  unverifiable: 'bg-amber-100 text-amber-800',
+};
+
 function kstTime(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('ko-KR', {
@@ -356,12 +373,14 @@ export default async function StockDashboardPage() {
 
   // 추이 차트용 이력 — 대시보드는 단일 종목이라 최신 스냅샷의 symbol을 따른다.
   const symbol = items[0]?.symbol ?? '000660';
-  const [ohlcvRows, flowRows, health, eventRows, regimeResult] = await Promise.all([
+  const [ohlcvRows, flowRows, health, eventRows, regimeResult, predRows, predStats] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', HISTORY_DAYS),
     getStockHistory(symbol, 'investor_flow', HISTORY_DAYS),
     getCollectorHealth(symbol),
     searchMarketEvents(MarketEventQuery.parse({ symbol, limit: 15 })),
     getStockRegime(symbol),
+    searchPredictions(PredictionQuery.parse({ symbol, limit: 8 })),
+    predictionStats(symbol),
   ]);
   const events = eventRows.map(toApiMarketEvent);
   const closePoints: ClosePoint[] = ohlcvRows
@@ -673,6 +692,47 @@ export default async function StockDashboardPage() {
                 </section>
               )}
             </div>
+          </section>
+        )}
+
+        {predRows.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-baseline justify-between gap-2 flex-wrap">
+              <h2 className="text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+                예측 채점
+              </h2>
+              <span className="text-xs text-zinc-400 tabular-nums">
+                {predStats.scored > 0
+                  ? `적중 ${predStats.confirmed}/${predStats.scored} (${Math.round((predStats.hit_rate ?? 0) * 100)}%)`
+                  : '채점 완료 0건'}
+                {predStats.pending > 0 ? ` · 대기 ${predStats.pending}` : ''}
+                {predStats.expired > 0 ? ` · 만료 ${predStats.expired}` : ''}
+              </span>
+            </div>
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-100 dark:divide-zinc-900">
+              {predRows.map(toApiPrediction).map((pr) => (
+                <div key={pr.id} className="p-3 flex gap-3 items-baseline">
+                  <span
+                    className={`shrink-0 text-[11px] px-1.5 py-0.5 rounded ${PRED_BADGE[pr.status] ?? 'bg-zinc-200 text-zinc-700'}`}
+                  >
+                    {PRED_TEXT[pr.status] ?? pr.status}
+                  </span>
+                  <div className="min-w-0 flex-1 text-sm">
+                    {pr.claim}
+                    <div className="text-[11px] text-zinc-400 mt-0.5 tabular-nums">
+                      {pr.metric}.{pr.field} {pr.comparator} {pr.threshold.toLocaleString('ko-KR')} @ {pr.target_bucket}
+                      {pr.actual_value !== null
+                        ? ` → 실측 ${pr.actual_value.toLocaleString('ko-KR')}`
+                        : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-zinc-400">
+              브리핑의 "지켜볼 것"을 기계가 채점한 기록이다. 등록 시점에 결과가 이미 있으면
+              접수 자체가 거부된다(사후 예측 방지).
+            </p>
           </section>
         )}
 

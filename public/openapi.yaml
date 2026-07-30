@@ -23,7 +23,7 @@ info:
     /api/stock/*: 별도 기능 — SK하이닉스(000660) 매매 **참고정보** 애그리게이터.
     수집기가 저장한 수급·일봉·외국인보유 스냅샷을 읽고, 그 값에 근거한 브리핑을 남긴다.
     자동매매·수익예측이 아니다. 매수/매도/목표가/등급은 스키마에 없고, 검증되지 않은 방향성 주장은 API가 거부한다.
-  version: '1.5.0'
+  version: '1.6.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -544,6 +544,60 @@ components:
               description: 각 판정의 근거 숫자. 브리핑에 쓸 때 라벨만 옮기지 말고 이 숫자를 함께 인용할 것.
             disclaimer: { type: string }
 
+    Prediction:
+      type: object
+      description: |
+        브리핑의 "지켜볼 것"을 기계가 채점 가능한 조건으로 기록한 것. **추천이 아니라 채점될 기록**이다.
+        데이터가 도착하면 결정론적으로 confirmed/refuted가 갈리고, 3일 유예 내 데이터가 안 오면 expired.
+      required: [id, symbol, claim, metric, field, comparator, threshold, target_bucket, status]
+      properties:
+        id:            { type: string, format: uuid }
+        symbol:        { type: string }
+        created_at:    { type: string, format: date-time }
+        analysis_id:   { type: [string, 'null'], format: uuid, description: 이 예측을 낳은 브리핑 }
+        authored_by:   { type: string }
+        kind:          { type: string, enum: [watch, directional], description: 'directional은 아직 쓰지 않는다 (§정직성)' }
+        claim:         { type: string, description: 사람이 읽는 문장 }
+        metric:        { type: string, description: 채점에 쓸 stock_snapshots.metric }
+        field:         { type: string, description: payload 내 숫자 필드 }
+        comparator:    { type: string, enum: [gt, gte, lt, lte] }
+        threshold:     { type: number }
+        target_bucket: { type: string, description: '채점 대상 bucket_key (일별 YYYY-MM-DD)' }
+        status:        { type: string, enum: [pending, confirmed, refuted, expired, unverifiable] }
+        actual_value:  { type: [number, 'null'] }
+        scored_at:     { type: [string, 'null'], format: date-time }
+        score_note:    { type: [string, 'null'] }
+
+    PredictionList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Prediction' } }
+        count: { type: integer }
+
+    PredictionStats:
+      type: object
+      description: 적중률 요약. hit_rate만 인용하지 말고 반드시 scored(표본 수)와 함께 말할 것.
+      properties:
+        symbol:    { type: string }
+        total:     { type: integer }
+        pending:   { type: integer }
+        confirmed: { type: integer }
+        refuted:   { type: integer }
+        expired:   { type: integer }
+        unverifiable: { type: integer }
+        scored:    { type: integer, description: confirmed + refuted }
+        hit_rate:  { type: [number, 'null'], description: 'confirmed / scored. 표본이 없으면 null' }
+        by_author:
+          type: array
+          items:
+            type: object
+            properties:
+              authored_by: { type: string }
+              confirmed:   { type: integer }
+              refuted:     { type: integer }
+              hit_rate:    { type: [number, 'null'] }
+
     Error:
       type: object
       required: [error]
@@ -956,6 +1010,51 @@ paths:
       responses:
         '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/MarketEventList' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/stock/prediction:
+    post:
+      operationId: createStockPrediction
+      x-openai-isConsequential: false
+      summary: 채점 가능한 관찰 조건 등록
+      description: |
+        브리핑에 "지켜볼 것"을 쓸 때, 기계가 채점할 수 있는 항목이면 여기에도 구조화해 등록한다.
+        예: "내일 수급에서 외국인 순매도가 이어지는지" →
+        {metric: investor_flow, field: foreign_net, comparator: lt, threshold: 0, target_bucket: 내일 날짜}.
+        - **대상 버킷의 데이터가 이미 있으면 409로 거부된다** — 결과가 나온 뒤의 등록은 예측이 아니다.
+        - kind는 watch만 쓴다. directional은 적중률 통계가 쌓이기 전까지 금지다.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Prediction' } } }
+      responses:
+        '201': { description: 등록됨, content: { application/json: { schema: { $ref: '#/components/schemas/Prediction' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: 대상 버킷 데이터가 이미 존재 (사후 예측), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    get:
+      operationId: getStockPredictions
+      x-openai-isConsequential: false
+      summary: 예측 목록 (조회가 곧 채점)
+      description: pending 중 데이터가 도착한 것은 이 호출 시점에 자동 채점된다.
+      parameters:
+        - { name: symbol, in: query, schema: { type: string, default: '000660' } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, confirmed, refuted, expired, unverifiable] } }
+        - { name: authored_by, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/PredictionList' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/stock/prediction/stats:
+    get:
+      operationId: getStockPredictionStats
+      x-openai-isConsequential: false
+      summary: 예측 적중률 요약
+      description: hit_rate를 인용할 땐 반드시 scored(표본 수)를 함께 말할 것. 표본 몇 건짜리 적중률은 의미가 없다.
+      parameters:
+        - { name: symbol, in: query, schema: { type: string, default: '000660' } }
+      responses:
+        '200': { description: 통계, content: { application/json: { schema: { $ref: '#/components/schemas/PredictionStats' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/stock/decision:

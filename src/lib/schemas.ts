@@ -220,6 +220,39 @@ export const MarketEventQuery = z.object({
 });
 export type MarketEventQuery = z.infer<typeof MarketEventQuery>;
 
+// Predictions — 반증 가능한 조건 + 자동 채점. 방향성 '주장'이 아니라 '검증 대상 기록'.
+export const PredictionComparator = z.enum(['gt', 'gte', 'lt', 'lte']);
+export const PredictionKind = z.enum(['watch', 'directional']);
+export const PredictionStatus = z.enum([
+  'pending',
+  'confirmed',
+  'refuted',
+  'expired',
+  'unverifiable',
+]);
+export const CreatePredictionInput = z.object({
+  symbol: z.string().min(1).max(20).default('000660'),
+  analysis_id: z.string().uuid().nullish(),
+  authored_by: z.string().max(40).default('claude-routine'),
+  kind: PredictionKind.default('watch'),
+  claim: z.string().min(1).max(500),
+  metric: z.string().min(1).max(40),
+  field: z.string().min(1).max(60),
+  comparator: PredictionComparator,
+  threshold: z.number().finite(),
+  // 채점 대상 bucket_key. 일별 YYYY-MM-DD 또는 인트라데이 ISO.
+  target_bucket: z.string().min(10).max(60),
+});
+export type CreatePredictionInput = z.infer<typeof CreatePredictionInput>;
+
+export const PredictionQuery = z.object({
+  symbol: z.string().min(1).max(20).optional(),
+  status: PredictionStatus.optional(),
+  authored_by: z.string().max(40).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type PredictionQuery = z.infer<typeof PredictionQuery>;
+
 // Trade decisions — 사람이 실제로 한 결정의 기록. AI 추천이 아니다.
 export const TradeAction = z.enum(['buy', 'sell', 'hold', 'watch', 'skip']);
 export const TradeDecisionStatus = z.enum(['open', 'closed']);

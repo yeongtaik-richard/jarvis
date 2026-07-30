@@ -7,6 +7,7 @@ import {
   boolean,
   smallint,
   integer,
+  doublePrecision,
   jsonb,
   index,
   uniqueIndex,
@@ -216,6 +217,34 @@ export const marketEvents = pgTable(
   ],
 );
 
+// 브리핑의 "지켜볼 것"을 기계 채점 가능한 조건으로 기록. 데이터가 오면 결정론적으로
+// confirmed/refuted가 갈린다. 이 적중률이 validated_directional 해금의 전제조건.
+export const stockPredictions = pgTable(
+  'stock_predictions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    symbol: text('symbol').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    analysisId: uuid('analysis_id').references(() => stockAnalysis.id),
+    authoredBy: text('authored_by').notNull().default('claude-routine'),
+    kind: text('kind').notNull().default('watch'), // watch | directional
+    claim: text('claim').notNull(),
+    metric: text('metric').notNull(),
+    field: text('field').notNull(),
+    comparator: text('comparator').notNull(), // gt | gte | lt | lte
+    threshold: doublePrecision('threshold').notNull(),
+    targetBucket: text('target_bucket').notNull(),
+    status: text('status').notNull().default('pending'),
+    actualValue: doublePrecision('actual_value'),
+    scoredAt: timestamp('scored_at', { withTimezone: true }),
+    scoreNote: text('score_note'),
+  },
+  (t) => [
+    index('ix_stock_predictions_symbol_created').on(t.symbol, sql`created_at desc`),
+    index('ix_stock_predictions_status').on(t.status, t.targetBucket),
+  ],
+);
+
 // 결정 → 결과 → 교훈 루프. action의 buy/sell은 **사람이 한 결정의 기록**이지
 // AI 추천이 아니다 (stock_analysis의 정직성 제약과 별개, docs/stock.md 참고).
 export const tradeDecisions = pgTable(
@@ -259,6 +288,8 @@ export type StockAnalysis = typeof stockAnalysis.$inferSelect;
 export type NewStockAnalysis = typeof stockAnalysis.$inferInsert;
 export type CollectorRun = typeof collectorRuns.$inferSelect;
 export type NewCollectorRun = typeof collectorRuns.$inferInsert;
+export type StockPrediction = typeof stockPredictions.$inferSelect;
+export type NewStockPrediction = typeof stockPredictions.$inferInsert;
 export type MarketEvent = typeof marketEvents.$inferSelect;
 export type NewMarketEvent = typeof marketEvents.$inferInsert;
 export type TradeDecision = typeof tradeDecisions.$inferSelect;
