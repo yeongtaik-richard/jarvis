@@ -195,6 +195,31 @@ export const CollectorRunQuery = z.object({
 });
 export type CollectorRunQuery = z.infer<typeof CollectorRunQuery>;
 
+// Market events — 공시·뉴스. (source, external_id)로 멱등 upsert.
+export const MarketEventSource = z.enum(['dart', 'news']);
+export const CreateMarketEventInput = z.object({
+  symbol: z.string().min(1).max(20),
+  source: MarketEventSource,
+  external_id: z.string().min(1).max(200),
+  published_at: z.string().datetime({ offset: true }).transform((v) => new Date(v)),
+  title: z.string().min(1).max(500),
+  url: z.string().max(2000).nullish(),
+  publisher: z.string().max(120).nullish(),
+  category: z.string().max(40).nullish(),
+  collector_run_id: z.string().uuid().nullish(),
+  raw: attributesSchema,
+});
+export type CreateMarketEventInput = z.infer<typeof CreateMarketEventInput>;
+
+export const MarketEventQuery = z.object({
+  symbol: z.string().min(1).max(20).optional(),
+  source: MarketEventSource.optional(),
+  // 이 시각 이후 발행분만 (장중 급변 구간 대조용)
+  since: z.coerce.date().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type MarketEventQuery = z.infer<typeof MarketEventQuery>;
+
 // Trade decisions — 사람이 실제로 한 결정의 기록. AI 추천이 아니다.
 export const TradeAction = z.enum(['buy', 'sell', 'hold', 'watch', 'skip']);
 export const TradeDecisionStatus = z.enum(['open', 'closed']);

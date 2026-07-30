@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { Header } from '@/app/components/Header';
 import { getCollectorHealth } from '@/lib/collector-run-service';
-import { StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
+import { searchMarketEvents, toApiMarketEvent } from '@/lib/market-event-service';
+import { MarketEventQuery, StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
 import {
   searchStockAnalysis,
   toApiStockAnalysis,
@@ -13,7 +14,7 @@ import {
   toApiStockSnapshot,
   type ApiStockSnapshot,
 } from '@/lib/stock-service';
-import { korQty, moneyMil, won } from './format';
+import { korQty, moneyKrw, moneyMil, won } from './format';
 import {
   CloseTrendChart,
   NetFlowChart,
@@ -45,6 +46,7 @@ const METRIC_LABEL: Record<string, string> = {
   daily_ohlcv: '일봉 (OHLCV)',
   foreign_holding: '외국인 보유',
   intraday_price: '장중 현재가',
+  valuation: '밸류에이션 · 기준선',
 };
 
 type Tone = 'pos' | 'neg' | 'neutral';
@@ -69,6 +71,28 @@ function flowRow(
     tone: net > 0 ? 'pos' : 'neg',
     sub,
   };
+}
+
+/** 수량 기준 순매수 행 (대금이 아니라 주식 수 — 단위를 섞지 않기 위해 별도 함수). */
+function flowQtyRow(label: string, qty: number | null): Row {
+  if (qty === null) return { label, value: '—' };
+  if (qty === 0) return { label, value: '보합', tone: 'neutral' };
+  return {
+    label,
+    value: `${qty > 0 ? '순매수' : '순매도'} ${korQty(Math.abs(qty), '주')}`,
+    tone: qty > 0 ? 'pos' : 'neg',
+  };
+}
+
+/** VI·시장경고 같은 플래그는 **켜졌을 때만** 줄을 만든다. 평소엔 'N'만 늘어놓는 노이즈다. */
+function flagRows(p: Record<string, unknown>): Row[] {
+  const on = (v: unknown) => typeof v === 'string' && v !== '' && v !== 'N' && v !== '00';
+  const rows: Row[] = [];
+  if (on(p.vi_code)) rows.push({ label: 'VI 발동', value: String(p.vi_code), tone: 'neutral' });
+  if (on(p.warn_code)) rows.push({ label: '시장경고', value: String(p.warn_code), tone: 'neg' });
+  if (on(p.short_over_yn)) rows.push({ label: '공매도 과열', value: '지정', tone: 'neg' });
+  if (on(p.caution_yn)) rows.push({ label: '투자주의', value: '지정', tone: 'neg' });
+  return rows;
 }
 
 function metricRows(item: ApiStockSnapshot): Row[] {
@@ -138,7 +162,43 @@ function metricRows(item: ApiStockSnapshot): Row[] {
       { label: '고가', value: num('high') === null ? '—' : won(num('high')!) },
       { label: '저가', value: num('low') === null ? '—' : won(num('low')!) },
       { label: '누적 거래량', value: vol === null ? '—' : korQty(vol, '주') },
-      { label: '누적 거래대금', value: amount === null ? '—' : korQty(amount, '원') },
+      { label: '누적 거래대금', value: amount === null ? '—' : moneyKrw(amount) },
+      flowQtyRow('외국인 순매수', num('foreign_net_qty')),
+      flowQtyRow('프로그램 순매수', num('program_net_qty')),
+      { label: '공매도 체결', value: num('short_qty') === null ? '—' : korQty(num('short_qty')!, '주') },
+      {
+        label: '대차잔고 비율',
+        value: num('loan_balance_rate') === null ? '—' : `${num('loan_balance_rate')}%`,
+      },
+      ...flagRows(p),
+    ];
+  }
+  if (item.metric === 'valuation') {
+    const per = num('per');
+    const pbr = num('pbr');
+    const cap = num('market_cap');
+    const hi = num('w52_high');
+    const lo = num('w52_low');
+    return [
+      { label: 'PER', value: per === null ? '—' : `${per}배` },
+      { label: 'PBR', value: pbr === null ? '—' : `${pbr}배` },
+      // 시총은 억원 단위로 온다 (payload.market_cap_unit)
+      { label: '시가총액', value: cap === null ? '—' : `${(cap / 10000).toFixed(1)}조` },
+      { label: 'EPS', value: num('eps') === null ? '—' : won(num('eps')!) },
+      { label: 'BPS', value: num('bps') === null ? '—' : won(num('bps')!) },
+      {
+        label: '52주 고가',
+        value: hi === null ? '—' : won(hi),
+        sub: p.w52_high_date ? String(p.w52_high_date) : undefined,
+      },
+      {
+        label: '52주 저가',
+        value: lo === null ? '—' : won(lo),
+        sub: p.w52_low_date ? String(p.w52_low_date) : undefined,
+      },
+      { label: '250일 고/저', value: num('d250_high') === null ? '—' : `${korQty(num('d250_high')!)} / ${korQty(num('d250_low')!)}` },
+      { label: '거래량 회전율', value: num('turnover_rate') === null ? '—' : `${num('turnover_rate')}%` },
+      { label: '업종', value: p.sector ? String(p.sector) : '—' },
     ];
   }
   if (item.metric === 'foreign_holding') {
@@ -255,11 +315,13 @@ export default async function StockDashboardPage() {
 
   // 추이 차트용 이력 — 대시보드는 단일 종목이라 최신 스냅샷의 symbol을 따른다.
   const symbol = items[0]?.symbol ?? '000660';
-  const [ohlcvRows, flowRows, health] = await Promise.all([
+  const [ohlcvRows, flowRows, health, eventRows] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', HISTORY_DAYS),
     getStockHistory(symbol, 'investor_flow', HISTORY_DAYS),
     getCollectorHealth(symbol),
+    searchMarketEvents(MarketEventQuery.parse({ symbol, limit: 15 })),
   ]);
+  const events = eventRows.map(toApiMarketEvent);
   const closePoints: ClosePoint[] = ohlcvRows
     .map((r) => ({ date: r.bucketKey, close: payloadNum(r.payload, 'close') }))
     .filter((p) => Number.isFinite(p.close));
@@ -525,6 +587,51 @@ export default async function StockDashboardPage() {
                 </section>
               )}
             </div>
+          </section>
+        )}
+
+        {events.length > 0 && (
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+              공시 · 뉴스
+            </h2>
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 divide-y divide-zinc-100 dark:divide-zinc-900">
+              {events.map((e) => (
+                <div key={e.id} className="p-3 flex gap-3 items-baseline">
+                  <span
+                    className={`shrink-0 text-[11px] px-1.5 py-0.5 rounded ${
+                      e.source === 'dart'
+                        ? 'bg-zinc-800 text-white dark:bg-zinc-200 dark:text-black'
+                        : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+                    }`}
+                  >
+                    {e.source === 'dart' ? '공시' : '뉴스'}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {e.url ? (
+                      <a
+                        href={e.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm hover:underline"
+                      >
+                        {e.title}
+                      </a>
+                    ) : (
+                      <span className="text-sm">{e.title}</span>
+                    )}
+                    <div className="text-[11px] text-zinc-400 mt-0.5">
+                      {kstTime(e.published_at)}
+                      {e.publisher ? ` · ${e.publisher}` : ''}
+                      {e.source === 'dart' ? ' · 시각은 날짜만 제공(09:00 표기)' : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-zinc-400">
+              사건의 존재와 시각만 모아둔 것이다. 호재·악재 판정이나 인과 해석은 하지 않는다.
+            </p>
           </section>
         )}
 

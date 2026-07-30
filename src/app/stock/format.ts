@@ -17,6 +17,17 @@ export function moneyMil(pbmn: number): string {
   return `${Math.round(a).toLocaleString('ko-KR')}백만`;
 }
 
+/**
+ * **원 단위** 금액 → 조/억. `moneyMil`(백만원)과 단위가 다르니 섞지 말 것.
+ * `korQty`는 억까지만 알아서 12조를 '124934.30억'으로 찍는다 — 금액엔 이걸 쓴다.
+ */
+export function moneyKrw(krw: number): string {
+  const a = Math.abs(krw);
+  if (a >= 1e12) return `${(krw / 1e12).toFixed(2)}조`;
+  if (a >= 1e8) return `${Math.round(krw / 1e8).toLocaleString('ko-KR')}억`;
+  return `${Math.round(krw).toLocaleString('ko-KR')}원`;
+}
+
 /** 'YYYY-MM-DD' → 'M/D' for axis ticks. */
 export function shortDate(bucketKey: string): string {
   const [, m, d] = bucketKey.split('-');

@@ -42,6 +42,8 @@ jobs:
         env:
           KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
           KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+          # 공시 수집용. 없으면 수집기가 공시를 건너뛰고 뉴스 RSS만 모은다.
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
           JARVIS_API_TOKEN: ${{ secrets.JARVIS_API_TOKEN }}
           JARVIS_BASE_URL: ${{ secrets.JARVIS_BASE_URL }}
           # scheduled runs have no inputs → falls back to 0 (latest day only)

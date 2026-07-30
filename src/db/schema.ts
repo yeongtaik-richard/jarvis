@@ -191,6 +191,31 @@ export const collectorRuns = pgTable(
   ],
 );
 
+// 공시·뉴스 이벤트. 스냅샷과 달리 한 시점에 여러 건이 흐르므로 별도 테이블이다.
+// 멱등키는 (source, external_id) — 공시 rcept_no, 뉴스 링크.
+export const marketEvents = pgTable(
+  'market_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    symbol: text('symbol').notNull(),
+    source: text('source').notNull(), // dart | news
+    externalId: text('external_id').notNull(),
+    // DART 공시는 시각이 없어 09:00 KST 근사다 (src/lib/market-sources.ts 참고).
+    publishedAt: timestamp('published_at', { withTimezone: true }).notNull(),
+    title: text('title').notNull(),
+    url: text('url'),
+    publisher: text('publisher'),
+    category: text('category'),
+    collectorRunId: uuid('collector_run_id'),
+    collectedAt: timestamp('collected_at', { withTimezone: true }).notNull().defaultNow(),
+    raw: jsonb('raw').notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => [
+    uniqueIndex('ux_market_events_natural').on(t.source, t.externalId),
+    index('ix_market_events_symbol_published').on(t.symbol, sql`published_at desc`),
+  ],
+);
+
 // 결정 → 결과 → 교훈 루프. action의 buy/sell은 **사람이 한 결정의 기록**이지
 // AI 추천이 아니다 (stock_analysis의 정직성 제약과 별개, docs/stock.md 참고).
 export const tradeDecisions = pgTable(
@@ -234,5 +259,7 @@ export type StockAnalysis = typeof stockAnalysis.$inferSelect;
 export type NewStockAnalysis = typeof stockAnalysis.$inferInsert;
 export type CollectorRun = typeof collectorRuns.$inferSelect;
 export type NewCollectorRun = typeof collectorRuns.$inferInsert;
+export type MarketEvent = typeof marketEvents.$inferSelect;
+export type NewMarketEvent = typeof marketEvents.$inferInsert;
 export type TradeDecision = typeof tradeDecisions.$inferSelect;
 export type NewTradeDecision = typeof tradeDecisions.$inferInsert;

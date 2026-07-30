@@ -19,8 +19,9 @@ GitHub Actions cron (평일: 18:43 마감 / 08:10 프리마켓 / 09~15시 매시
   └─ scripts/collect-stock.ts
        └─ src/lib/kis-marketdata.ts  (KIS 읽기전용)
        └─ POST ${JARVIS_BASE_URL}/api/stock/collector-run  ← 실행 시작/종료 보고
-       └─ POST ${JARVIS_BASE_URL}/api/stock/snapshot   ← Bearer
-              └─ upsert → Neon (stock_snapshots)
+       └─ src/lib/market-sources.ts  (OpenDART 공시 + 구글 뉴스 RSS)
+       └─ POST ${JARVIS_BASE_URL}/api/stock/{snapshot,event}   ← Bearer
+              └─ upsert → Neon (stock_snapshots, market_events)
                      └─ /stock 대시보드 (server component, 서비스 직접 조회)
 
 Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디맨드)
@@ -38,11 +39,12 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 
 | 영역 | 파일 |
 |---|---|
-| DB 스키마 | `src/db/schema.ts` — `stockSnapshots`, `stockAnalysis`, `collectorRuns`, `tradeDecisions` |
-| 마이그레이션 | `drizzle/0004_stock_snapshots.sql` ~ `0007_trade_decisions.sql` |
+| DB 스키마 | `src/db/schema.ts` — `stockSnapshots`, `stockAnalysis`, `collectorRuns`, `marketEvents`, `tradeDecisions` |
+| 마이그레이션 | `drizzle/0004_stock_snapshots.sql` ~ `0008_market_events.sql` |
 | zod 입력/쿼리 | `src/lib/schemas.ts` — `CreateStockSnapshotInput` 외 |
-| 서비스 | `src/lib/stock-service.ts`, `stock-analysis-service.ts`, `collector-run-service.ts`, `trade-decision-service.ts` |
-| API | `src/app/api/stock/{snapshot,analysis,collector-run,health,decision}/route.ts` |
+| 서비스 | `src/lib/stock-service.ts`, `stock-analysis-service.ts`, `collector-run-service.ts`, `market-event-service.ts`, `trade-decision-service.ts` |
+| 이벤트 소스 | `src/lib/market-sources.ts` — OpenDART 공시 + 구글 뉴스 RSS (읽기 전용) |
+| API | `src/app/api/stock/{snapshot,analysis,collector-run,health,event,decision}/route.ts` |
 | 결정 로그 UI | `src/app/stock/decisions/` (page + server actions) |
 | KIS 클라이언트 | `src/lib/kis-marketdata.ts` (읽기전용) |
 | 수집기 | `scripts/collect-stock.ts` |
@@ -70,10 +72,18 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 | `investor_flow` | `close`, `amount_unit: 'million_krw'`, `{foreign,institution,individual}_{net,buy,sell}` — 투자자별 순매수/매수/매도 **대금(백만원)** |
 | `daily_ohlcv` | `open, high, low, close, volume` |
 | `foreign_holding` | `price, foreign_ratio(%), foreign_qty` |
-| `intraday_price` | `price, change, change_rate, open, high, low, volume, amount_krw, amount_unit: 'krw', foreign_ratio, foreign_qty` |
+| `intraday_price` | 가격·거래: `price, change, change_rate, open, high, low, volume, amount_krw, amount_unit: 'krw'` · 수급의 질: `foreign_ratio, foreign_qty, foreign_net_qty, program_net_qty, short_qty, loan_balance_rate` · 플래그: `vi_code, warn_code, short_over_yn, caution_yn` |
+| `valuation` | `per, pbr, eps, bps, market_cap(+`market_cap_unit: 'hundred_million_krw'`), listed_shares, turnover_rate, sector, w52_high/low(+date), d250_high/low` |
 
-> ⚠️ **거래대금 단위가 지표마다 다르다.** `investor_flow`는 **백만원**,
-> `intraday_price.amount_krw`는 **원**이다. payload의 `amount_unit`을 보고 환산할 것.
+> ⚠️ **금액 단위가 지표마다 다르다.** `investor_flow`는 **백만원**,
+> `intraday_price.amount_krw`는 **원**, `valuation.market_cap`은 **억원**이다.
+> payload의 `*_unit` 필드를 보고 환산할 것. 화면 포맷터도 셋이 다르다 —
+> `moneyMil`(백만원) / `moneyKrw`(원) / 시총은 카드에서 직접 환산.
+> `korQty`는 억까지만 알아서 12조를 '124934.30억'으로 찍는다 (실제로 낸 버그).
+
+`intraday_price`·`valuation`은 **KIS inquire-price 한 번 호출로 같이** 얻는다. 이 TR이
+80개 필드를 주는데 예전엔 3개만 쓰고 버렸다 — 밸류에이션, 52주/250일 고저, 프로그램
+순매수, 대차잔고율, 공매도 체결량, VI·시장경고가 전부 그 응답에 있다.
 
 `intraday_price`만 `bucket_key`가 **KST 정시 ISO**(`2026-07-30T13:00+09:00`)다. cron이 늦게
 떠도 "그 시각대 1건"으로 멱등하게 덮어쓰고, 실제 조회 시각은 `as_of_at`에 남는다.
@@ -95,6 +105,19 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 - `kind`: `close | premarket | intraday | backfill | manual`, `status`: `running | ok | partial | error`
 - 수집기가 시작·종료 두 번 보고한다(같은 id로 upsert). **보고가 실패해도 수집은 계속**한다
   — 모니터링 때문에 데이터를 잃는 건 본말전도.
+
+### `market_events` — 공시·뉴스
+- 스냅샷과 달리 한 시점에 여러 건이 흐르므로 별도 테이블. 멱등키 **`(source, external_id)`** —
+  공시는 `rcept_no`, 뉴스는 **링크의 sha256**(구글 뉴스 링크가 수백 자라 인덱스에 부담).
+- `title`은 갱신하되 **`published_at`은 갱신하지 않는다.** 최초 발행 시각이 이벤트의
+  정체성이고, 시각이 흔들리면 급변 구간 대조가 깨진다.
+- **공시는 시각이 없다.** DART `list.json`이 접수일자(날짜)만 줘서 `09:00 KST`로 근사해
+  저장한다. **분 단위 대조는 뉴스만 유효**하다.
+- 뉴스는 구글 뉴스 RSS(키 불필요, 48시간·40건 상한). 채용·일반 기사가 섞이므로 소비하는
+  쪽에서 관련성을 판단한다. 제목 끝의 언론사 suffix는 제거한다 — 원문에 이미 붙어 있으면
+  구글이 하나 더 붙여 `- 머니투데이 - 머니투데이`가 되므로 반복 제거한다.
+- **호재·악재 라벨이나 인과 해석은 저장하지 않는다.** 사건의 존재와 시각까지가 사실이고,
+  인과는 검증 대상이다. 대시보드 문구·openapi 설명에도 같은 선을 그어놨다.
 
 ### `trade_decisions` — 결정 → 결과 → 교훈
 - **사람이 실제로 한 결정의 기록**이다. 여기 `action`(buy/sell/…)이 있다고 해서 위 정직성
@@ -126,11 +149,13 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 | POST | `/api/stock/collector-run` | 수집 실행 보고(upsert). **수집기 전용** |
 | GET | `/api/stock/collector-run` | 실행 이력. `symbol/status` 필터 |
 | GET | `/api/stock/health` | 수집 생존 요약 — `missed`, 마지막 성공, 지표별 최신 버킷 |
+| POST/GET | `/api/stock/event` | 공시·뉴스 upsert(배열 허용, **수집기 전용**) / 조회 |
 | POST/GET | `/api/stock/decision` | 매매 결정 기록/목록 |
 | GET/PATCH | `/api/stock/decision/{id}` | 단건 / 결과·교훈 붙이기 |
 
-`public/openapi.yaml`(v1.3.0)에 문서화돼 있다. 예외는 **`POST /api/stock/collector-run`**
-하나 — 수집기 전용이고 모델이 실행 기록을 만들 이유가 없어 스펙에서 뺐다.
+`public/openapi.yaml`(v1.4.0)에 문서화돼 있다. 예외는 **수집기 전용 쓰기 두 개** —
+`POST /api/stock/collector-run`과 `POST /api/stock/event`는 모델이 만들 데이터가 아니라
+스펙에서 뺐다(읽기 GET은 있다).
 
 스펙 쪽 정직성 장치: `CreateStockAnalysisInput`의 `claim_type` enum에서
 `validated_directional`을 **뺐고**, `POST /api/stock/snapshot`은 "수집기 전용, 대화 중
@@ -166,8 +191,11 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
   실측: 30일 요청 → 거래일 22일 × 2지표 + 당일 보유비율 1건 = 45건.
 - **import는 상대경로** (`../src/lib/kis-marketdata`) — tsx 단독 실행이 `@/` alias를
   해석하지 못함. `@/`로 바꾸지 말 것.
+- **이벤트 수집**(공시·뉴스)은 백필을 뺀 모든 실행에 붙는다. 소스별로 따로 감싸서 하나가
+  죽어도 다른 하나는 올라간다. `DART_API_KEY`가 없으면 공시만 건너뛰고 뉴스는 계속한다.
 - env: `KIS_APP_KEY`, `KIS_APP_SECRET`, `JARVIS_API_TOKEN`, `JARVIS_BASE_URL`,
-  (선택) `STOCK_SYMBOL`.
+  `DART_API_KEY`, (선택) `STOCK_SYMBOL`, `DART_CORP_CODE`(기본 `00164779` = SK하이닉스,
+  **종목코드와 다른 체계**이니 종목 바꿀 때 같이 바꿔야 한다), `NEWS_QUERY`.
 
 > 🔐 **KIS app key는 그 자체로 주문 가능**하다. jarvis는 high-high의 live-trading
 > 타입 게이팅을 상속하지 않으므로, KIS 키를 **Vercel env에 두지 말 것.**
@@ -192,7 +220,7 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 - `workflow_dispatch`로 수동 트리거 가능.
 - Node `.nvmrc`(20.20.2), pnpm 9.
 - Repo Secrets: `KIS_APP_KEY`, `KIS_APP_SECRET`, `JARVIS_API_TOKEN`,
-  `JARVIS_BASE_URL`. (Environment secrets 아님 — **Repository secrets**)
+  `JARVIS_BASE_URL`, `DART_API_KEY`. (Environment secrets 아님 — **Repository secrets**)
 - 수동 실행: `gh workflow run collect-stock.yml` → `gh run watch <id> --exit-status`.
 - 백필도 CI에서 가능: `gh workflow run collect-stock.yml -f backfill_days=30`.
   스케줄 실행은 input이 없으므로 `STOCK_BACKFILL_DAYS`가 `0`(최신 1일)으로 떨어진다.

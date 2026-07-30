@@ -23,7 +23,7 @@ info:
     /api/stock/*: 별도 기능 — SK하이닉스(000660) 매매 **참고정보** 애그리게이터.
     수집기가 저장한 수급·일봉·외국인보유 스냅샷을 읽고, 그 값에 근거한 브리핑을 남긴다.
     자동매매·수익예측이 아니다. 매수/매도/목표가/등급은 스키마에 없고, 검증되지 않은 방향성 주장은 API가 거부한다.
-  version: '1.3.0'
+  version: '1.4.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -466,6 +466,36 @@ components:
         lesson:  { type: [string, 'null'], maxLength: 4000 }
         outcome_at: { type: [string, 'null'], format: date-time }
 
+    MarketEvent:
+      type: object
+      description: |
+        공시(DART) 또는 뉴스 헤드라인 한 건. **사실만 담는다** — 호재/악재 판정이나
+        인과 해석은 저장하지 않고, 그런 라벨을 만들어 붙여서도 안 된다.
+      required: [id, symbol, source, external_id, published_at, title]
+      properties:
+        id:          { type: string, format: uuid }
+        symbol:      { type: string }
+        source:      { type: string, enum: [dart, news] }
+        external_id: { type: string, description: '멱등 키 — 공시 rcept_no, 뉴스는 링크 해시' }
+        published_at:
+          type: string
+          format: date-time
+          description: |
+            발행 시각. **공시(dart)는 DART가 날짜만 주므로 09:00 KST 근사값이다** —
+            공시로 장중 분 단위 대조를 하지 말 것. 시각이 정확한 건 뉴스(news)뿐이다.
+        title:     { type: string }
+        url:       { type: [string, 'null'] }
+        publisher: { type: [string, 'null'], description: '공시는 제출인, 뉴스는 언론사' }
+        category:  { type: [string, 'null'] }
+        collected_at: { type: string, format: date-time }
+
+    MarketEventList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/MarketEvent' } }
+        count: { type: integer }
+
     Error:
       type: object
       required: [error]
@@ -833,6 +863,29 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
       responses:
         '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/CollectorRunList' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/stock/event:
+    get:
+      operationId: getMarketEvents
+      x-openai-isConsequential: false
+      summary: 공시·뉴스 조회
+      description: |
+        가격이 크게 움직인 이유를 찾을 때 호출한다. 급변 구간과 이벤트 시각을 나란히 놓는 것까지가
+        이 데이터의 역할이다.
+        - `since`로 특정 시각 이후만 좁힐 수 있다 (장중 급변 구간 대조).
+        - **공시의 시각은 09:00 KST 근사**다(DART가 날짜만 준다). 분 단위 대조는 뉴스만 유효하다.
+        - 뉴스에는 채용·일반 기사가 섞여 있다. 제목을 보고 관련성을 판단할 것.
+        읽은 헤드라인을 근거로 "이 뉴스 때문에 올랐다/내렸다"고 단정하지 말 것 — 사건의 존재와
+        시각만 사실이고, 인과는 검증되지 않았다.
+      parameters:
+        - { name: symbol, in: query, schema: { type: string } }
+        - { name: source, in: query, schema: { type: string, enum: [dart, news] } }
+        - { name: since, in: query, description: '이 시각 이후 발행분만', schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/MarketEventList' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 

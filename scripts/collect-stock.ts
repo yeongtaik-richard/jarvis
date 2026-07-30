@@ -22,10 +22,15 @@ import {
   issueToken,
   type KisCreds,
 } from '../src/lib/kis-marketdata';
+import { fetchDartDisclosures, fetchNewsHeadlines } from '../src/lib/market-sources';
 
 const SYMBOL = process.env.STOCK_SYMBOL ?? '000660'; // SK hynix
 const BASE = process.env.JARVIS_BASE_URL ?? 'http://localhost:3000';
 const KST = 9 * 3600 * 1000;
+// 이벤트 소스 파라미터. DART 고유번호는 종목코드와 다른 체계다 (SK하이닉스 = 00164779,
+// corpCode.xml에서 확인). 종목을 바꾸면 이 둘도 같이 바꿔야 한다.
+const CORP_CODE = process.env.DART_CORP_CODE ?? '00164779';
+const NEWS_QUERY = process.env.NEWS_QUERY ?? 'SK하이닉스';
 
 function ymd(kisDate: string): string {
   return `${kisDate.slice(0, 4)}-${kisDate.slice(4, 6)}-${kisDate.slice(6, 8)}`;
@@ -115,6 +120,56 @@ async function reportRun(
   }
 }
 
+/**
+ * 공시·뉴스 수집. 소스별로 따로 감싸서 **하나가 죽어도 다른 하나는 올라간다**
+ * (뉴스 RSS는 외부 서비스라 언제든 형식이 바뀔 수 있다).
+ * DART 키가 없으면 공시는 건너뛰고 뉴스만 한다.
+ */
+async function collectEvents(
+  token: string,
+  runId: string,
+  errors: string[],
+): Promise<number> {
+  const events: Record<string, unknown>[] = [];
+
+  const dartKey = process.env.DART_API_KEY;
+  if (dartKey) {
+    try {
+      const rows = await fetchDartDisclosures(dartKey, CORP_CODE, 7);
+      events.push(...rows.map((e) => ({ ...e, symbol: SYMBOL, collector_run_id: runId })));
+      console.log(`[collect] dart ${rows.length}건`);
+    } catch (e) {
+      errors.push(`dart: ${String(e)}`);
+    }
+  } else {
+    console.log('[collect] dart: DART_API_KEY 없음 — 공시 건너뜀');
+  }
+
+  try {
+    const rows = await fetchNewsHeadlines(NEWS_QUERY, 48, 40);
+    events.push(...rows.map((e) => ({ ...e, symbol: SYMBOL, collector_run_id: runId })));
+    console.log(`[collect] news ${rows.length}건 (48시간 이내)`);
+  } catch (e) {
+    errors.push(`news: ${String(e)}`);
+  }
+
+  if (!events.length) return 0;
+  try {
+    const res = await fetch(`${BASE}/api/stock/event`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify(events),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
+    const body = (await res.json()) as { upserted?: number };
+    console.log(`[collect] events upserted ${body.upserted ?? 0}`);
+    return body.upserted ?? 0;
+  } catch (e) {
+    errors.push(`events post: ${String(e)}`);
+    return 0;
+  }
+}
+
 async function postSnapshot(token: string, snap: SnapshotInput): Promise<void> {
   const res = await fetch(`${BASE}/api/stock/snapshot`, {
     method: 'POST',
@@ -200,6 +255,44 @@ async function main(): Promise<void> {
             amount_unit: 'krw', // 수급(백만원)과 단위가 다르다 — 섞지 말 것
             foreign_ratio: q.foreignRatio,
             foreign_qty: q.foreignQty,
+            // 수급의 '질' — 누가 사는지
+            foreign_net_qty: q.foreignNetQty,
+            program_net_qty: q.programNetQty,
+            short_qty: q.shortQty,
+            loan_balance_rate: q.loanBalanceRate,
+            // 상태 플래그 (빈 값/'N'이면 해당 없음)
+            vi_code: q.viCode,
+            warn_code: q.warnCode,
+            short_over_yn: q.shortOverYn,
+            caution_yn: q.cautionYn,
+          },
+        });
+        // 밸류에이션·기준선은 하루 단위로 충분해서 별도 metric(일별 버킷)으로 둔다.
+        // 장중 매시 실행이 같은 버킷을 덮어쓰므로 값은 계속 최신이다.
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: 'valuation',
+          bucket_key: today.dashed,
+          trading_date_kst: today.dashed,
+          as_of_at: at.toISOString(),
+          collector_run_id: runId,
+          payload: {
+            per: q.per,
+            pbr: q.pbr,
+            eps: q.eps,
+            bps: q.bps,
+            market_cap: q.marketCap,
+            market_cap_unit: 'hundred_million_krw', // 시총은 억원 단위로 온다
+            listed_shares: q.listedShares,
+            turnover_rate: q.turnoverRate,
+            sector: q.sector,
+            w52_high: q.w52High,
+            w52_low: q.w52Low,
+            w52_high_date: q.w52HighDate,
+            w52_low_date: q.w52LowDate,
+            d250_high: q.d250High,
+            d250_low: q.d250Low,
           },
         });
         // 같은 응답에 외국인 보유 지표가 들어 있으니 foreign_holding도 같이 갱신한다
@@ -227,6 +320,7 @@ async function main(): Promise<void> {
     } catch (e) {
       errors.push(`intraday_price: ${String(e)}`);
     }
+    await collectEvents(apiToken, runId, errors);
     await flush(apiToken, runId, kind, queue, errors);
     return;
   }
@@ -321,6 +415,9 @@ async function main(): Promise<void> {
   } catch (e) {
     errors.push(`foreign_holding: ${String(e)}`);
   }
+
+  // 4) 공시·뉴스. 백필은 과거 데이터 적재라 이벤트를 다시 긁을 이유가 없다.
+  if (!backfill) await collectEvents(apiToken, runId, errors);
 
   await flush(apiToken, runId, kind, queue, errors);
 }

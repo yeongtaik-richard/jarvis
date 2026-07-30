@@ -162,11 +162,38 @@ export interface Quote {
   amountKrw: number; // 누적 거래대금 (원 — investor_flow의 백만원과 단위가 다르다)
   foreignRatio: number;
   foreignQty: number;
+  // 수급의 '질' — 누가 사는지
+  foreignNetQty: number; // 외국인 순매수 수량
+  programNetQty: number; // 프로그램 순매수 수량
+  shortQty: number; // 최종 공매도 체결량
+  loanBalanceRate: number; // 대차잔고 비율 %
+  // 상태 플래그. 빈 문자열/'N'이면 해당 없음.
+  viCode: string; // VI 발동 구분
+  warnCode: string; // 시장경고 구분
+  shortOverYn: string; // 공매도 과열
+  cautionYn: string; // 투자주의
+  // 밸류에이션·기준선
+  per: number;
+  pbr: number;
+  eps: number;
+  bps: number;
+  marketCap: number; // 시가총액 (억원 단위로 옴)
+  listedShares: number;
+  turnoverRate: number; // 거래량 회전율 %
+  sector: string; // 업종명
+  w52High: number;
+  w52Low: number;
+  w52HighDate: string;
+  w52LowDate: string;
+  d250High: number;
+  d250Low: number;
 }
 
 /**
- * 장중 스냅샷용 현재가 묶음. `foreignHolding()`과 같은 TR(inquire-price)이지만 장중에
- * 의미 있는 필드까지 함께 뽑는다.
+ * 장중 스냅샷용 현재가 묶음. `foreignHolding()`과 같은 TR(inquire-price)이다 —
+ * **이 TR은 80개 필드를 주는데** 예전엔 3개만 꺼내 쓰고 나머지를 버렸다. 밸류에이션,
+ * 52주/250일 고저, 프로그램 순매수, 대차잔고율, 공매도 체결량, VI·시장경고까지
+ * 전부 같은 응답에 들어 있어서 추가 호출 없이 얻는다.
  */
 export async function currentQuote(
   token: string,
@@ -192,6 +219,28 @@ export async function currentQuote(
     amountKrw: num(o.acml_tr_pbmn),
     foreignRatio: num(o.hts_frgn_ehrt),
     foreignQty: num(o.frgn_hldn_qty),
+    foreignNetQty: num(o.frgn_ntby_qty),
+    programNetQty: num(o.pgtr_ntby_qty),
+    shortQty: num(o.last_ssts_cntg_qty),
+    loanBalanceRate: num(o.whol_loan_rmnd_rate),
+    viCode: o.vi_cls_code ?? '',
+    warnCode: o.mrkt_warn_cls_code ?? '',
+    shortOverYn: o.short_over_yn ?? '',
+    cautionYn: o.invt_caful_yn ?? '',
+    per: num(o.per),
+    pbr: num(o.pbr),
+    eps: num(o.eps),
+    bps: num(o.bps),
+    marketCap: num(o.hts_avls),
+    listedShares: num(o.lstn_stcn),
+    turnoverRate: num(o.vol_tnrt),
+    sector: o.bstp_kor_isnm ?? '',
+    w52High: num(o.w52_hgpr),
+    w52Low: num(o.w52_lwpr),
+    w52HighDate: o.w52_hgpr_date ?? '',
+    w52LowDate: o.w52_lwpr_date ?? '',
+    d250High: num(o.d250_hgpr),
+    d250Low: num(o.d250_lwpr),
   };
 }
 
