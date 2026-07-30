@@ -44,6 +44,7 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 | zod 입력/쿼리 | `src/lib/schemas.ts` — `CreateStockSnapshotInput` 외 |
 | 서비스 | `src/lib/stock-service.ts`, `stock-analysis-service.ts`, `collector-run-service.ts`, `market-event-service.ts`, `trade-decision-service.ts` |
 | 이벤트 소스 | `src/lib/market-sources.ts` — OpenDART 공시 + 구글 뉴스 RSS (읽기 전용) |
+| 지표·국면 | `src/lib/stock-indicators.ts`(순수 계산·임계값), `stock-regime-service.ts`(DB 로드) |
 | API | `src/app/api/stock/{snapshot,analysis,collector-run,health,event,decision}/route.ts` |
 | 결정 로그 UI | `src/app/stock/decisions/` (page + server actions) |
 | KIS 클라이언트 | `src/lib/kis-marketdata.ts` (읽기전용) |
@@ -149,11 +150,12 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 | POST | `/api/stock/collector-run` | 수집 실행 보고(upsert). **수집기 전용** |
 | GET | `/api/stock/collector-run` | 실행 이력. `symbol/status` 필터 |
 | GET | `/api/stock/health` | 수집 생존 요약 — `missed`, 마지막 성공, 지표별 최신 버킷 |
+| GET | `/api/stock/regime` | 지표 + 규칙 기반 국면. 저장 안 하고 매번 계산 |
 | POST/GET | `/api/stock/event` | 공시·뉴스 upsert(배열 허용, **수집기 전용**) / 조회 |
 | POST/GET | `/api/stock/decision` | 매매 결정 기록/목록 |
 | GET/PATCH | `/api/stock/decision/{id}` | 단건 / 결과·교훈 붙이기 |
 
-`public/openapi.yaml`(v1.4.0)에 문서화돼 있다. 예외는 **수집기 전용 쓰기 두 개** —
+`public/openapi.yaml`(v1.5.0)에 문서화돼 있다. 예외는 **수집기 전용 쓰기 두 개** —
 `POST /api/stock/collector-run`과 `POST /api/stock/event`는 모델이 만들 데이터가 아니라
 스펙에서 뺐다(읽기 GET은 있다).
 
@@ -230,6 +232,35 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 > best-effort고 러너 혼잡에 따라 밀린다. 그래서
 > (a) `missed` 유예를 3시간으로 잡았고, (b) 프리마켓 실행이 개장(09:00) 이후로 밀려도
 > 부분 봉을 담지 않도록 위 §확정 전 값 규칙을 뒀다. **정시 실행을 전제로 하는 로직은 쓰지 말 것.**
+
+---
+
+## 지표·국면 (규칙 기반)
+
+`src/lib/stock-indicators.ts`는 **DB를 모르는 순수 함수**다. `stock-regime-service.ts`가
+저장된 일봉·수급을 읽어 넘기고, `/api/stock/regime`과 대시보드 "국면" 섹션이 그 결과를 쓴다.
+
+**저장하지 않고 매번 계산한다.** 파생값이라 원천과 어긋나면 그게 버그이고, 규칙을 고치는
+순간 저장분은 전부 낡은 값이 된다. 269거래일 계산은 밀리초라 캐싱할 이유도 없다.
+
+계산 항목: MA5/20/60/120과 이격률, 250일 고점 대비 낙폭, 연속 상승·하락일,
+20일 실현변동성과 **그 값의 이력 백분위**, 최근 5일 대비 60일 거래량 비율,
+투자자별 20일 누적 순매수와 외국인 연속 방향.
+
+분류 규칙(임계값은 파일 상단 상수):
+- **추세** — 가격이 MA20에서 ±3% 밖이고 MA20·MA60 배열이 같은 방향일 때만 추세로 본다.
+  둘이 어긋나면 `sideways`. 급반전 구간에서 방향을 단정하지 않기 위한 규칙이다.
+- **변동성** — 절대 %가 아니라 **자기 이력 백분위**로 판정한다(≤25 calm / ≥75 elevated /
+  ≥90 extreme). 절대값은 종목마다 기준이 달라 비교가 안 된다.
+- **수급** — 외국인 20일 누적 부호 + 같은 방향 2거래일 이상 연속일 때만 방향을 붙이고,
+  아니면 `mixed`. 2026-07-30 실측: 20일 누적은 순매도인데 당일 순매수로 전환 → `mixed`.
+
+> ⚠️ **표본이 창보다 짧으면 `null`을 준다.** MA20을 5일로 계산해 놓고 MA20이라 부르면
+> 그 뒤 모든 판단이 조용히 틀어진다. 소비하는 쪽은 null을 0으로 읽지 말 것.
+
+> ⚠️ **이 라벨은 예측이 아니다.** "하락 추세"는 지금까지 내려왔다는 서술이다. 응답에
+> `disclaimer`를 함께 실어 보내고, 화면·openapi 설명에도 같은 선을 그어놨다.
+> 규칙이 코드에 드러나 있어야 나중에 적중률을 채점할 수 있다(Phase 5의 전제).
 
 ---
 
@@ -407,6 +438,10 @@ STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
 - **아침 프리마켓 cron** — 08:10 KST 평일 (마감 수집 실패 시 안전망).
 - **cron 자동 실행 검증** — 2026-07-30 확인. 다만 1~2시간 지연이 정상이라 유예를 3시간으로 뒀다.
 - **장중 수집** — `intraday_price` 매시 (09~15시 KST 평일).
+- **KIS 필드 회수** — 밸류에이션·수급질·플래그 (`valuation` metric 신설, 추가 호출 없음).
+- **공시·뉴스** — `market_events` + OpenDART/구글 뉴스 RSS.
+- **일봉 페이지네이션 + 장기 백필** — 269거래일(2025-06-25~) 적재. 수급은 KIS 30일 상한.
+- **지표·국면 라벨** — MA60/120·변동성 백분위·국면 분류 + `/api/stock/regime`.
 - **자동 브리핑 루틴** — Claude 클라우드 루틴 + 브리핑 전용 토큰 (§자동 브리핑 루틴).
 
 ### ⬜ 남은 일 (대략 우선순위 순)

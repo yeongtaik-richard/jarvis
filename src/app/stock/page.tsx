@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { Header } from '@/app/components/Header';
 import { getCollectorHealth } from '@/lib/collector-run-service';
 import { searchMarketEvents, toApiMarketEvent } from '@/lib/market-event-service';
+import { getStockRegime } from '@/lib/stock-regime-service';
 import { MarketEventQuery, StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
 import {
   searchStockAnalysis,
@@ -291,6 +292,46 @@ const RUN_STATUS_BADGE: Record<string, string> = {
   error: 'bg-rose-100 text-rose-800',
 };
 
+// 국면 배지. 추세 색은 국내 관례(빨강=상승, 파랑=하락), 변동성은 상태색(중립→경고).
+const TREND_TEXT: Record<string, string> = {
+  up: '상승 추세',
+  down: '하락 추세',
+  sideways: '횡보',
+  unknown: '추세 판단 불가',
+};
+const TREND_BADGE: Record<string, string> = {
+  up: 'bg-red-100 text-red-800',
+  down: 'bg-blue-100 text-blue-800',
+  sideways: 'bg-zinc-200 text-zinc-700',
+  unknown: 'bg-zinc-200 text-zinc-700',
+};
+const VOL_TEXT: Record<string, string> = {
+  calm: '변동성 낮음',
+  normal: '변동성 보통',
+  elevated: '변동성 높음',
+  extreme: '변동성 극단',
+  unknown: '변동성 판단 불가',
+};
+const VOL_BADGE: Record<string, string> = {
+  calm: 'bg-zinc-200 text-zinc-700',
+  normal: 'bg-zinc-200 text-zinc-700',
+  elevated: 'bg-amber-100 text-amber-800',
+  extreme: 'bg-rose-100 text-rose-800',
+  unknown: 'bg-zinc-200 text-zinc-700',
+};
+const FLOW_TEXT: Record<string, string> = {
+  foreign_buying: '외국인 순매수 지속',
+  foreign_selling: '외국인 순매도 지속',
+  mixed: '수급 엇갈림',
+  unknown: '수급 판단 불가',
+};
+const FLOW_BADGE: Record<string, string> = {
+  foreign_buying: 'bg-red-100 text-red-800',
+  foreign_selling: 'bg-blue-100 text-blue-800',
+  mixed: 'bg-zinc-200 text-zinc-700',
+  unknown: 'bg-zinc-200 text-zinc-700',
+};
+
 function kstTime(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('ko-KR', {
@@ -315,11 +356,12 @@ export default async function StockDashboardPage() {
 
   // 추이 차트용 이력 — 대시보드는 단일 종목이라 최신 스냅샷의 symbol을 따른다.
   const symbol = items[0]?.symbol ?? '000660';
-  const [ohlcvRows, flowRows, health, eventRows] = await Promise.all([
+  const [ohlcvRows, flowRows, health, eventRows, regimeResult] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', HISTORY_DAYS),
     getStockHistory(symbol, 'investor_flow', HISTORY_DAYS),
     getCollectorHealth(symbol),
     searchMarketEvents(MarketEventQuery.parse({ symbol, limit: 15 })),
+    getStockRegime(symbol),
   ]);
   const events = eventRows.map(toApiMarketEvent);
   const closePoints: ClosePoint[] = ohlcvRows
@@ -403,6 +445,50 @@ export default async function StockDashboardPage() {
               . KRX 공휴일이면 정상입니다 — 스케줄은 휴장일을 모릅니다.
             </p>
           </div>
+        )}
+
+        {regimeResult.regime && regimeResult.indicators && (
+          <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 space-y-2">
+            <div className="flex items-baseline justify-between gap-2 flex-wrap">
+              <h2 className="font-medium">
+                국면{' '}
+                <span className="text-xs font-normal text-zinc-400">
+                  규칙 기반 · 최근 {regimeResult.indicators.trading_days}거래일
+                </span>
+              </h2>
+              <span className="text-xs text-zinc-400">
+                기준 {regimeResult.indicators.as_of}
+              </span>
+            </div>
+            <div className="flex gap-1.5 flex-wrap">
+              <span
+                className={`text-xs px-2 py-0.5 rounded ${TREND_BADGE[regimeResult.regime.trend]}`}
+              >
+                {TREND_TEXT[regimeResult.regime.trend]}
+              </span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded ${VOL_BADGE[regimeResult.regime.volatility]}`}
+              >
+                {VOL_TEXT[regimeResult.regime.volatility]}
+                {regimeResult.indicators.vol20_percentile !== null
+                  ? ` ${regimeResult.indicators.vol20_percentile}%ile`
+                  : ''}
+              </span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded ${FLOW_BADGE[regimeResult.regime.flow]}`}
+              >
+                {FLOW_TEXT[regimeResult.regime.flow]}
+              </span>
+            </div>
+            <ul className="text-xs text-zinc-600 dark:text-zinc-400 space-y-0.5 tabular-nums">
+              {regimeResult.regime.reasons.map((r) => (
+                <li key={r}>· {r}</li>
+              ))}
+            </ul>
+            <p className="text-[11px] text-zinc-400 pt-1">
+              {regimeResult.regime.disclaimer} 임계값은 `src/lib/stock-indicators.ts`에 있다.
+            </p>
+          </section>
         )}
 
         {analyses.length > 0 && (
