@@ -13,7 +13,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export const POST = withLog(async (req: NextRequest) => {
-  const authError = checkBearer(req);
+  // 브리핑 루틴이 "브리핑 품질/데이터 한계"를 스스로 남길 수 있도록 전용 토큰도 허용한다.
+  // append-only 노트라 파급이 작고, 읽기(GET)는 여전히 전권 토큰만 된다.
+  const authError = checkBearer(req, { also: 'briefing' });
   if (authError) return authError;
 
   let raw: unknown;

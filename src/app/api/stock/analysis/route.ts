@@ -13,7 +13,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export const POST = withLog(async (req: NextRequest) => {
-  const authError = checkBearer(req);
+  // 자동 브리핑 루틴이 쓰는 자리 — 전용 토큰 허용 (src/lib/auth.ts 참고).
+  const authError = checkBearer(req, { also: 'briefing' });
   if (authError) return authError;
 
   let raw: unknown;
@@ -36,7 +37,7 @@ export const POST = withLog(async (req: NextRequest) => {
 });
 
 export const GET = withLog(async (req: NextRequest) => {
-  const authError = checkBearer(req);
+  const authError = checkBearer(req, { also: 'briefing' });
   if (authError) return authError;
 
   const params = Object.fromEntries(new URL(req.url).searchParams);

@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
  * 성공하지 못한 것 — 다만 KRX 공휴일에는 오탐이 난다 (스케줄은 공휴일을 모른다).
  */
 export const GET = withLog(async (req: NextRequest) => {
-  const authError = checkBearer(req);
+  const authError = checkBearer(req, { also: 'briefing' });
   if (authError) return authError;
 
   const symbol = new URL(req.url).searchParams.get('symbol') ?? '000660';

@@ -36,7 +36,7 @@ export const POST = withLog(async (req: NextRequest) => {
 });
 
 export const GET = withLog(async (req: NextRequest) => {
-  const authError = checkBearer(req);
+  const authError = checkBearer(req, { also: 'briefing' });
   if (authError) return authError;
 
   const params = Object.fromEntries(new URL(req.url).searchParams);
