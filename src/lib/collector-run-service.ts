@@ -79,7 +79,12 @@ export async function searchCollectorRuns(
 
 const KST_OFFSET_MS = 9 * 3_600_000;
 const CLOSE_RUN_MIN = 18 * 60 + 43; // .github/workflows/collect-stock.yml
-const GRACE_MIN = 45; // GitHub cron은 best-effort라 정시에 안 뜬다
+/**
+ * GitHub cron은 best-effort고 실제로 많이 늦는다 — 관측: 2026-07-29 마감분 2시간 5분 지연,
+ * 07-30 프리마켓분 약 1시간 지연. 45분 유예로는 **지각한 실행을 누락으로 오탐**했다.
+ * 하루 1회짜리 작업이라 몇 시간 늦게 알아도 늦지 않으니, 유예를 넉넉히 준다.
+ */
+const GRACE_MIN = 180;
 
 /**
  * 이미 지났어야 할 가장 최근 마감 수집 시각(+유예). 이 시각 이후로 성공 실행이 없으면

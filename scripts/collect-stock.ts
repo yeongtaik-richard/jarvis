@@ -34,6 +34,19 @@ function kstDay(daysAgo = 0): { compact: string; dashed: string } {
   return { compact: s.replace(/-/g, ''), dashed: s };
 }
 
+// KRX 정규장 마감 15:30 + 종가단일가 정리. 이 시각 전에는 그날 일봉·수급이 확정이 아니다.
+const SETTLE_HOUR_KST = 16;
+
+/**
+ * 오늘 값이 확정됐는지. 프리마켓 cron이 늦게 떠서 개장 뒤에 돌면 KIS가 **진행 중인
+ * 부분 봉**을 오늘 일봉으로 돌려준다 (실제로 2026-07-30 09:09 실행이 9분치 봉을 저장했다).
+ * 같은 자연키를 마감 수집이 덮어쓰긴 하지만, 그 사이 대시보드는 부분 봉을 종가로 보여주고
+ * 마감 수집이 실패하면 그 값이 그날 일봉으로 남아버린다 — 그래서 아예 담지 않는다.
+ */
+function settledToday(): boolean {
+  return new Date(Date.now() + KST).getUTCHours() >= SETTLE_HOUR_KST;
+}
+
 /**
  * `--backfill[=N]` or STOCK_BACKFILL_DAYS=N → collect N calendar days of history.
  * 0 (default) = latest settled day only, which is what the daily cron wants.
@@ -124,17 +137,23 @@ async function main(): Promise<void> {
   const errors: string[] = [];
   const queue: SnapshotInput[] = [];
 
-  // KIS returns newest-first. Take the backfill window (or just the latest day)
-  // and reverse it so snapshots are POSTed oldest-first.
-  function pickWindow<T>(rows: T[], dateOf: (r: T) => string): T[] {
-    const picked = backfill ? rows.filter((r) => dateOf(r) >= cutoff) : rows.slice(0, 1);
+  const settled = settledToday();
+
+  // KIS returns newest-first. Drop today's row until the session settles, take the
+  // backfill window (or just the latest day), and reverse so we POST oldest-first.
+  function pickWindow<T>(rows: T[], dateOf: (r: T) => string, label: string): T[] {
+    const usable = settled ? rows : rows.filter((r) => dateOf(r) < today.dashed);
+    if (usable.length !== rows.length) {
+      console.log(`[collect] ${label}: skipping today's unsettled row (before ${SETTLE_HOUR_KST}:00 KST)`);
+    }
+    const picked = backfill ? usable.filter((r) => dateOf(r) >= cutoff) : usable.slice(0, 1);
     return picked.reverse();
   }
 
   // 1) investor flow
   try {
     const flows = await investorFlows(kisToken, creds, SYMBOL);
-    const picked = pickWindow(flows, (f) => ymd(f.date));
+    const picked = pickWindow(flows, (f) => ymd(f.date), 'investor_flow');
     if (!picked.length) errors.push('investor_flow: no settled rows');
     for (const f of picked) {
       queue.push({
@@ -172,7 +191,7 @@ async function main(): Promise<void> {
   try {
     const start = kstDay(Math.max(backfill, 15)).compact;
     const bars = await dailyCandles(kisToken, creds, SYMBOL, start, today.compact);
-    const picked = pickWindow(bars, (b) => ymd(b.date));
+    const picked = pickWindow(bars, (b) => ymd(b.date), 'daily_ohlcv');
     if (!picked.length) errors.push('daily_ohlcv: no bars');
     for (const b of picked) {
       queue.push({
