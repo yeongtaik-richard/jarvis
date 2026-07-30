@@ -310,6 +310,26 @@ STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
 >
 > 🚫 KIS 키는 루틴에 **절대** 넣지 않는다. 주문 가능 키다. 루틴은 jarvis API만 본다.
 
+### 루틴이 올린 개선노트 처리하기
+
+루틴이 "데이터·API가 부족해 못 한 것"을 발견하면 `improvement_notes`에 쌓인다. 그 뒤 처리는
+**사람 몫**이고, 상태 기계는 이미 있다 (`status`: `open → triaged → applied | wontfix`).
+
+| 상태 | 뜻 |
+|---|---|
+| `open` | 루틴이 올린 그대로. 아직 안 봤다. |
+| `triaged` | 봤고 고칠 가치가 있다고 판단. 아직 안 고쳤다. |
+| `applied` | 고쳤다. **`resolution_note`에 커밋 SHA를 적는다.** |
+| `wontfix` | 안 고치기로 했다. `resolution_note`에 **왜 안 하는지**를 적는다. |
+
+- 처리 화면: `/improvement` (status 필터) → 단건에서 상태·메모 수정. API는 `PATCH /api/improvement/{id}`.
+- **루틴은 등록(POST)과 조회(GET)만 된다. 상태 변경 권한은 없다** — 판정을 자기가 내리면
+  루프가 자기충족적이 된다. 브리핑 전용 토큰의 경계가 그 선이다.
+- 루틴은 새 노트를 올리기 전에 GET으로 **중복을 먼저 확인**한다. 같은 한계를 매시간 다시
+  올리면 목록이 쓸모없어진다.
+- 첫 사례: `819b9c5a` — "장중에 `foreign_holding`이 갱신되지 않아 그걸 근거로 한 관찰 항목이
+  구조적으로 채점 불가" → `applied`, 커밋 `7469506`.
+
 ---
 
 ## 온디맨드 브리핑 (Claude 세션이 하는 일)
