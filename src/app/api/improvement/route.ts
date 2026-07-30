@@ -38,7 +38,8 @@ export const POST = withLog(async (req: NextRequest) => {
 });
 
 export const GET = withLog(async (req: NextRequest) => {
-  const authError = checkBearer(req);
+  // 브리핑 루틴도 읽을 수 있어야 이미 올린 노트를 또 올리지 않는다 (중복 방지).
+  const authError = checkBearer(req, { also: 'briefing' });
   if (authError) return authError;
 
   const params = Object.fromEntries(new URL(req.url).searchParams);

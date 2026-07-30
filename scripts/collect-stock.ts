@@ -202,8 +202,26 @@ async function main(): Promise<void> {
             foreign_qty: q.foreignQty,
           },
         });
+        // 같은 응답에 외국인 보유 지표가 들어 있으니 foreign_holding도 같이 갱신한다
+        // (KIS 호출 추가 없음). 이게 없으면 장중 내내 아침 값이 고정돼서, "보유비율이
+        // 순매도를 따라 내려오는지" 같은 관찰 항목이 구조적으로 '판단 불가'가 된다
+        // — 브리핑 루틴이 스스로 올린 개선노트 819b9c5a.
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: 'foreign_holding',
+          bucket_key: today.dashed,
+          trading_date_kst: today.dashed,
+          as_of_at: at.toISOString(),
+          collector_run_id: runId,
+          payload: {
+            price: q.price,
+            foreign_ratio: q.foreignRatio,
+            foreign_qty: q.foreignQty,
+          },
+        });
         console.log(
-          `[collect] intraday_price ${kstHourBucket(at)} (${q.price}원, ${q.changeRate}%)`,
+          `[collect] intraday_price ${kstHourBucket(at)} (${q.price}원, ${q.changeRate}%) + foreign_holding ${q.foreignRatio}%`,
         );
       }
     } catch (e) {
