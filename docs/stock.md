@@ -15,7 +15,7 @@ SK하이닉스(`000660`) **매매 참고정보** 대시보드. 리처드님이 �
 ## 데이터 흐름
 
 ```
-GitHub Actions cron (18:43 KST 마감 / 08:10 KST 프리마켓, 평일)
+GitHub Actions cron (평일: 18:43 마감 / 08:10 프리마켓 / 09~15시 매시 장중)
   └─ scripts/collect-stock.ts
        └─ src/lib/kis-marketdata.ts  (KIS 읽기전용)
        └─ POST ${JARVIS_BASE_URL}/api/stock/collector-run  ← 실행 시작/종료 보고
@@ -23,8 +23,8 @@ GitHub Actions cron (18:43 KST 마감 / 08:10 KST 프리마켓, 평일)
               └─ upsert → Neon (stock_snapshots)
                      └─ /stock 대시보드 (server component, 서비스 직접 조회)
 
-Claude 세션 (온디맨드 브리핑)
-  └─ 최신 snapshot 읽고 브리핑 작성
+Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디맨드)
+  └─ 최신 snapshot 읽고 브리핑 작성 (+ 직전 브리핑 채점)
        └─ POST /api/stock/analysis  → Neon (stock_analysis)
               └─ /stock "최신 브리핑" 섹션
 ```
@@ -63,7 +63,7 @@ Claude 세션 (온디맨드 브리핑)
 - `captured_at`: insert/update **둘 다 DB `now()`** 사용 (Node 시계 아님 — upsert 시
   시각이 거꾸로 가지 않도록. `stock-service.ts`의 `sql\`now()\`` 참고).
 
-현재 수집 중인 `metric` 3종 (`source: 'kis'`):
+현재 수집 중인 `metric` 4종 (`source: 'kis'`):
 
 | metric | payload 필드 |
 |---|---|
@@ -92,7 +92,7 @@ Claude 세션 (온디맨드 브리핑)
 ### `collector_runs` — 수집 실행 기록 (운영 모니터링)
 - `id`는 수집기가 만든 `collector_run_id`와 **같은 값** → 그 실행이 남긴 스냅샷을
   조인 없이 추적할 수 있다.
-- `kind`: `close | premarket | backfill | manual`, `status`: `running | ok | partial | error`
+- `kind`: `close | premarket | intraday | backfill | manual`, `status`: `running | ok | partial | error`
 - 수집기가 시작·종료 두 번 보고한다(같은 id로 upsert). **보고가 실패해도 수집은 계속**한다
   — 모니터링 때문에 데이터를 잃는 건 본말전도.
 
@@ -111,7 +111,8 @@ Claude 세션 (온디맨드 브리핑)
 
 - 모든 라우트: `runtime='nodejs'`, `dynamic='force-dynamic'`.
 - 인증: **`checkBearer(req)`** — `Authorization: Bearer <JARVIS_API_TOKEN>`,
-  timing-safe 비교. `/api/`는 `middleware.ts`에서 **패스워드 미들웨어를 우회**하고
+  timing-safe 비교. 일부 라우트는 `{ also: 'briefing' }`로 **브리핑 전용 토큰**도 받는다
+  (스냅샷 GET, 브리핑 GET/POST, health GET, improvement POST — §자동 브리핑 루틴). `/api/`는 `middleware.ts`에서 **패스워드 미들웨어를 우회**하고
   Bearer만 검사한다 (페이지는 `JARVIS_WEB_PASSWORD` 세션 쿠키).
 - 공통 배관: `withLog(...)` 래퍼 + zod `safeParse` + `ok()/jsonError()/fromZod()`
   (`@/lib/http`).
@@ -146,6 +147,7 @@ Claude 세션 (온디맨드 브리핑)
 - `FHKST01010900` inquire-investor → 투자자별 매수/매도/순매수 대금·수량 (30일)
 - `FHKST03010100` inquire-daily-itemchartprice → 일봉 OHLCV
 - `FHKST01010100` inquire-price → 현재가 + 외국인 보유비율/수량
+  (`foreignHolding()`은 보유 지표만, `currentQuote()`는 장중용으로 등락·거래량·거래대금까지)
 
 `scripts/collect-stock.ts`:
 - KIS에서 위 3종 fetch → 정규화 → jarvis API로 POST. `collector_run_id`(uuid)로
@@ -263,9 +265,9 @@ pnpm db:migrate          # drizzle/*.sql 전체 재적용 (idempotent, create ..
 pnpm collect:stock       # .env.local 로 수집기 로컬 실행 (JARVIS_BASE_URL 대상으로 POST)
 ```
 
-로컬 백필(=프로덕션 Neon에 직접 쌓기): dev 서버를 띄우고 그쪽으로 POST하면 Vercel
-Deployment Protection을 우회할 수 있다. `.env.local`의 `DATABASE_URL`이 프로덕션
-Neon이라 결과는 CI 실행과 동일하다.
+로컬 백필(=프로덕션 Neon에 직접 쌓기): dev 서버를 띄우고 그쪽으로 POST한다. 사내
+프록시가 `*.vercel.app`을 막아서 로컬에서는 프로덕션 URL을 못 치기 때문이고,
+`.env.local`의 `DATABASE_URL`이 프로덕션 Neon이라 결과는 CI 실행과 동일하다.
 
 ```bash
 pnpm dev &
@@ -273,13 +275,40 @@ set -a; . ~/git/high-high/.env; set +a   # KIS 키 (레포 밖에만 둔다)
 STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
 ```
 
-`.env.local` 필요 키: `DATABASE_URL`, `JARVIS_API_TOKEN`, `JARVIS_WEB_PASSWORD`.
+`.env.local` 필요 키: `DATABASE_URL`, `JARVIS_API_TOKEN`, `JARVIS_WEB_PASSWORD`,
+`JARVIS_BRIEFING_TOKEN`(자동 브리핑 루틴용 — **Vercel 환경변수에도 같은 값이 있어야** 한다).
 로컬에서 `collect:stock`을 돌리려면 `KIS_APP_KEY/SECRET`, `JARVIS_BASE_URL`도 추가해야
 한다(기본 `.env.local`엔 없음 — CI 시크릿으로만 돎).
 
 마이그레이션은 손으로 쓴 **idempotent SQL**(`create table if not exists …`)이고
 `src/db/migrate.ts`가 매 실행마다 `drizzle/`의 모든 `.sql`을 다시 적용한다. 새 지표가
 컬럼을 추가할 일은 거의 없다(payload jsonb라서).
+
+---
+
+## 자동 브리핑 루틴 (Claude 클라우드)
+
+`trig_01TF1cTEXXQ4pfVCZfDAHnta` — **평일 09:30~15:30 KST 매시**(cron `30 0-6 * * 1-5` UTC).
+관리·실행 로그: https://claude.ai/code/routines/trig_01TF1cTEXXQ4pfVCZfDAHnta
+(삭제는 이 화면에서만 되고 API로는 안 된다.)
+
+- 장중 수집 cron보다 **30분 뒤**에 돈다 — 같은 시각에 돌면 아직 그 시간대 데이터가 없다.
+- 하는 일: ①`intraday_price` 신선도 확인 ②**직전 브리핑의 "지켜볼 것"을 지금 데이터로 채점**
+  ③현황·이상치·지켜볼 것 작성 ④`POST /api/stock/analysis`(`kind='intraday'`,
+  `authored_by='claude-routine'`) ⑤데이터·API 한계가 있었으면 개선노트 1건.
+- **안 쓰는 조건이 프롬프트에 박혀 있다**: 장중 데이터가 60분 이상 밀렸거나, 직전 브리핑
+  30분 이내 + 가격 변화 0.3% 미만이면 건너뛴다. 매시간 같은 말을 반복하면 대시보드가
+  노이즈가 된다.
+- "지켜볼 것"은 **다음 시간에 채점 가능한 문장**으로 쓰게 했다. 채점 결과에 '판단 불가'가
+  쌓이면 그건 브리핑이 검증 불가능하게 쓰였다는 신호로 본다.
+
+> 🔑 **토큰.** 루틴은 로컬 env에 접근하지 못해서 프롬프트에 토큰을 들고 있다. 그래서 전권
+> 토큰이 아니라 **`JARVIS_BRIEFING_TOKEN`**(스냅샷·브리핑 읽기 + 브리핑 쓰기 + 개선노트
+> 쓰기)만 준다. `src/lib/auth.ts`의 `checkBearer(req, { also: 'briefing' })`가 그 경계다.
+> **Vercel 환경변수에 이 키가 없으면 루틴은 401을 받고 아무것도 쓰지 않는다**(그렇게
+> 설계했다 — 조용히 실패하지 않고 보고한다).
+>
+> 🚫 KIS 키는 루틴에 **절대** 넣지 않는다. 주문 가능 키다. 루틴은 jarvis API만 본다.
 
 ---
 
@@ -295,10 +324,11 @@ STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
 
 ## Gotchas
 
-- **Vercel Deployment Protection.** 공개 `*.vercel.app` 도메인은 플랫폼 레벨에서
-  API/페이지를 `403`(HTML)로 막을 수 있다. 세션에서 데이터를 **읽어 검증**할 땐
-  `DATABASE_URL`로 **Neon 직접 조회**가 확실하다. 수집기가 통과하는 건 GitHub
-  Secret의 `JARVIS_BASE_URL`(보호 안 된 경로)로 POST하기 때문.
+- **`*.vercel.app`이 403이면 그건 사내 프록시(Zscaler)다 — Vercel이 아니다.**
+  2026-07-30 확인: 로컬에서 프로덕션 URL을 치면 Zscaler 차단 페이지(403 HTML)가 오지만,
+  Anthropic 클라우드 루틴에서 같은 URL을 치면 우리 앱의 JSON이 온다(`request_logs`에
+  `curl/8.5.0`로 찍힘). **Deployment Protection 때문이라던 종전 설명은 틀렸다.**
+  로컬 세션에서 검증할 땐 Neon 직접 조회나 `pnpm dev`(→ 같은 프로덕션 DB)를 쓸 것.
 - **tsx alias 미해석.** `scripts/`의 단독 스크립트는 `@/` 대신 상대경로 import.
 - **captured_at은 DB `now()`.** upsert set에서 Node `new Date()` 쓰면 시각 역행.
 - **`latest=true`는 `captured_at`(기록 시각) 기준이지 거래일 기준이 아니다.**
@@ -328,16 +358,15 @@ STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
 - **매매 결정 로그** — `trade_decisions` + `/stock/decisions` + API 4개.
 - **아침 프리마켓 cron** — 08:10 KST 평일 (마감 수집 실패 시 안전망).
 - **cron 자동 실행 검증** — 2026-07-30 확인. 다만 1~2시간 지연이 정상이라 유예를 3시간으로 뒀다.
+- **장중 수집** — `intraday_price` 매시 (09~15시 KST 평일).
+- **자동 브리핑 루틴** — Claude 클라우드 루틴 + 브리핑 전용 토큰 (§자동 브리핑 루틴).
 
 ### ⬜ 남은 일 (대략 우선순위 순)
-1. **자동 브리핑 스케줄** — 지금은 수동 온디맨드. 2026-07-29에 **보류 결정**:
-   GitHub Actions + Claude API로 갈지, Claude Code 클라우드 루틴으로 갈지 정하지 않았다.
-   전자는 `ANTHROPIC_API_KEY` 시크릿과 호출 비용이 붙고, 후자는 로직이 레포 밖에 산다.
-2. **KRX 휴장일 캘린더** — `missed` 공휴일 오탐 제거.
-3. **수집 항목 확대** — KRX 연기금 세분·이력, DART 5%+ 대주주, SOX/글로벌 오버나이트 갭.
-4. **장중 하이브리드** — 결정론적 지표 + AI 저빈도. 실시간 시세가 필요하면 cron으로는
-   안 되고 상시 프로세스 호스팅이 필요 (아래 열린 결정).
-5. **방향성 지표 + 적중률 검증** — §12의 `validated_directional`을 해금하는 전제조건.
+1. **KRX 휴장일 캘린더** — `missed` 공휴일 오탐 제거.
+2. **수집 항목 확대** — KRX 연기금 세분·이력, DART 5%+ 대주주, SOX/글로벌 오버나이트 갭.
+3. **장중 하이브리드 심화** — 지금은 매시 스냅샷 + 매시 브리핑까지다. 초·분 단위
+   실시간이 필요해지면 cron으로는 안 되고 상시 프로세스 호스팅이 필요 (아래 열린 결정).
+4. **방향성 지표 + 적중률 검증** — §12의 `validated_directional`을 해금하는 전제조건.
    검증 통계 없이는 방향성 주장 금지. 이후 다종목 확장.
 
 ### 열린 결정
