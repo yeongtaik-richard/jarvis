@@ -3,10 +3,17 @@ import {
   classifyRegime,
   computeIndicators,
   type Bar,
+  type BenchmarkSeries,
   type Flow,
   type Indicators,
   type Regime,
 } from './stock-indicators';
+
+/** 수집기의 `benchmark_*` metric과 화면 라벨의 대응. 코드는 kis-marketdata의 INDEX_CODES. */
+const BENCHMARKS: { metric: string; key: string; label: string }[] = [
+  { metric: 'benchmark_kospi', key: 'kospi', label: 'KOSPI' },
+  { metric: 'benchmark_electronics', key: 'electronics', label: '전기·전자 업종' },
+];
 
 export type RegimeResult = {
   symbol: string;
@@ -25,9 +32,10 @@ const num = (payload: unknown, key: string): number => {
  * 전부 낡은 값이 된다. 269일 계산은 밀리초 단위라 캐싱할 이유도 없다.
  */
 export async function getStockRegime(symbol: string, days = 300): Promise<RegimeResult> {
-  const [ohlcv, flowRows] = await Promise.all([
+  const [ohlcv, flowRows, ...benchRows] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', days),
     getStockHistory(symbol, 'investor_flow', days),
+    ...BENCHMARKS.map((b) => getStockHistory(symbol, b.metric, days)),
   ]);
 
   const bars: Bar[] = ohlcv
@@ -49,6 +57,15 @@ export async function getStockRegime(symbol: string, days = 300): Promise<Regime
     }))
     .filter((f) => Number.isFinite(f.foreign));
 
-  const indicators = computeIndicators(bars, flows);
+  // 아직 수집 안 된 벤치마크는 빈 시계열이 되고, 지표 쪽에서 null로 떨어진다.
+  const benchmarks: BenchmarkSeries[] = BENCHMARKS.map((b, i) => ({
+    key: b.key,
+    label: b.label,
+    bars: (benchRows[i] ?? [])
+      .map((r) => ({ date: r.bucketKey, close: num(r.payload, 'close') }))
+      .filter((x) => Number.isFinite(x.close)),
+  })).filter((b) => b.bars.length > 0);
+
+  const indicators = computeIndicators(bars, flows, benchmarks);
   return { symbol, indicators, regime: classifyRegime(indicators) };
 }

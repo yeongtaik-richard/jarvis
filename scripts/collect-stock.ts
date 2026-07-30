@@ -23,6 +23,9 @@ import {
   currentQuote,
   dailyCandles,
   dailyCandlesRange,
+  INDEX_CODES,
+  indexDaily,
+  indexDailyRange,
   foreignHolding,
   investorFlows,
   issueToken,
@@ -404,6 +407,48 @@ async function main(): Promise<void> {
     }
   } catch (e) {
     errors.push(`daily_ohlcv: ${String(e)}`);
+  }
+
+  // 2b) 벤치마크 지수. 종목과 같은 창을 쓰고, 같은 §확정 전 값 규칙을 적용한다.
+  //     "시장이 빠진 건지 이 종목이 빠진 건지"를 가리려면 이게 있어야 한다.
+  //     symbol은 추적 종목 그대로 두고 metric으로 구분한다 — 대시보드·국면 계산이
+  //     symbol 기준으로 조회하므로, 지수를 별도 symbol로 넣으면 조인이 필요해진다.
+  for (const [key, code] of Object.entries(INDEX_CODES)) {
+    try {
+      const start = kstDay(Math.max(backfill, 15)).compact;
+      const rows = backfill
+        ? await indexDailyRange(kisToken, creds, code, start, today.compact, {
+            // 지수는 페이지가 50건이라 종목(100건)보다 호출이 두 배 필요하다.
+            maxCalls: Math.min(30, Math.ceil(backfill / 50) + 2),
+          })
+        : await indexDaily(kisToken, creds, code, start, today.compact);
+      const picked = pickWindow(rows, (r) => ymd(r.date), `benchmark_${key}`);
+      for (const r of picked) {
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: `benchmark_${key}`,
+          bucket_key: ymd(r.date),
+          trading_date_kst: ymd(r.date),
+          collector_run_id: runId,
+          payload: {
+            index_code: code,
+            close: r.close,
+            open: r.open,
+            high: r.high,
+            low: r.low,
+            volume: r.volume,
+          },
+        });
+      }
+      if (picked.length) {
+        console.log(
+          `[collect] benchmark_${key} ${picked.length} day(s): ${ymd(picked[0]!.date)}..${ymd(picked.at(-1)!.date)}`,
+        );
+      }
+    } catch (e) {
+      errors.push(`benchmark_${key}: ${String(e)}`);
+    }
   }
 
   // 3) foreign holding — snapshot of *now*; this TR carries no history, so even

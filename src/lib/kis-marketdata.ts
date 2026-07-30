@@ -151,6 +151,89 @@ export async function dailyCandles(
     }));
 }
 
+export interface IndexBar {
+  date: string; // YYYYMMDD
+  close: number;
+  open: number;
+  high: number;
+  low: number;
+  volume: number;
+}
+
+/** 벤치마크로 쓰는 업종/지수 코드. `FID_COND_MRKT_DIV_CODE='U'`와 함께 쓴다. */
+export const INDEX_CODES = {
+  kospi: '0001',
+  electronics: '0013', // 전기·전자 — SK하이닉스가 속한 업종
+} as const;
+
+/**
+ * 업종/지수 일별 시세 (FHKUP03500100). 종목 일봉과 응답 형태가 달라
+ * (`bstp_nmix_*`) 별도 함수로 둔다. 반환은 **최신순**.
+ */
+export async function indexDaily(
+  token: string,
+  creds: KisCreds,
+  code: string,
+  start: string,
+  end: string,
+): Promise<IndexBar[]> {
+  const body = await kisGet<{ output2?: Record<string, string>[] }>(
+    token,
+    creds,
+    '/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice',
+    'FHKUP03500100',
+    {
+      FID_COND_MRKT_DIV_CODE: 'U',
+      FID_INPUT_ISCD: code,
+      FID_INPUT_DATE_1: start,
+      FID_INPUT_DATE_2: end,
+      FID_PERIOD_DIV_CODE: 'D',
+    },
+  );
+  return (body.output2 ?? [])
+    .filter((o) => o.stck_bsop_date)
+    .map((o) => ({
+      date: o.stck_bsop_date ?? '',
+      close: num(o.bstp_nmix_prpr),
+      open: num(o.bstp_nmix_oprc),
+      high: num(o.bstp_nmix_hgpr),
+      low: num(o.bstp_nmix_lwpr),
+      volume: num(o.acml_vol),
+    }));
+}
+
+/**
+ * 지수도 한 번에 다 안 온다 — **종목 일봉은 100건, 지수는 50건**이 상한이다(확인됨).
+ * 같은 방식으로 창을 밀며 받되, 호출 수 계산은 50건 기준으로 잡아야 조용히 잘리지 않는다.
+ */
+export async function indexDailyRange(
+  token: string,
+  creds: KisCreds,
+  code: string,
+  start: string,
+  end: string,
+  opts: { maxCalls?: number; delayMs?: number } = {},
+): Promise<IndexBar[]> {
+  const maxCalls = opts.maxCalls ?? 12;
+  const delayMs = opts.delayMs ?? 250;
+  const byDate = new Map<string, IndexBar>();
+  let cursor = end;
+
+  for (let i = 0; i < maxCalls; i++) {
+    const page = await indexDaily(token, creds, code, start, cursor);
+    if (!page.length) break;
+    const before = byDate.size;
+    for (const b of page) byDate.set(b.date, b);
+    if (byDate.size === before) break;
+    const earliest = page.reduce((min, b) => (b.date < min ? b.date : min), page[0]!.date);
+    if (earliest <= start) break;
+    cursor = prevYmd(earliest);
+    if (cursor < start) break;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
+}
+
 /** `YYYYMMDD` 하루 전. 문자열 날짜 계산을 Date로 왕복시키지 않기 위한 헬퍼. */
 function prevYmd(ymd: string): string {
   const d = new Date(

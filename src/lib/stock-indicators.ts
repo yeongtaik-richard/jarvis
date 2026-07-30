@@ -15,6 +15,24 @@ export interface Bar {
   volume: number;
 }
 
+/** 벤치마크(지수) 종가 시계열. 종목과 같은 거래일 축을 쓴다. */
+export interface BenchmarkSeries {
+  key: string; // 'kospi' | 'electronics' ...
+  label: string;
+  bars: { date: string; close: number }[];
+}
+
+export interface RelativeStrength {
+  key: string;
+  label: string;
+  /** 종목 수익률 − 벤치마크 수익률 (%p). 양수면 시장보다 덜 빠지거나 더 올랐다. */
+  excess_5d: number | null;
+  excess_20d: number | null;
+  excess_60d: number | null;
+  stock_20d_pct: number | null;
+  benchmark_20d_pct: number | null;
+}
+
 export interface Flow {
   date: string;
   foreign: number; // 순매수 대금 (백만원)
@@ -56,6 +74,8 @@ export interface Indicators {
   institution_net_20d: number | null;
   individual_net_20d: number | null;
   foreign_streak_days: number; // 같은 방향 연속 (양수=순매수, 음수=순매도)
+  /** 벤치마크 대비 초과수익. 벤치마크가 없으면 빈 배열. */
+  relative: RelativeStrength[];
 }
 
 const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
@@ -67,8 +87,41 @@ function sd(a: number[]): number {
 
 const round = (n: number, d = 1) => Number(n.toFixed(d));
 
+/**
+ * 기간 수익률(%). 표본이 창보다 짧으면 null — 3일치로 20일 수익률을 만들지 않는다.
+ * 날짜 축이 어긋난 벤치마크를 그냥 붙이면 초과수익이 거짓이 되므로, 비교는 **종목의
+ * 시작·끝 거래일과 같은 날짜가 벤치마크에도 있을 때만** 한다.
+ */
+function pctChange(series: { date: string; close: number }[], days: number): number | null {
+  if (series.length < days + 1) return null;
+  const from = series[series.length - 1 - days]!;
+  const to = series[series.length - 1]!;
+  if (!from.close) return null;
+  return (to.close / from.close - 1) * 100;
+}
+
+function excess(
+  stock: { date: string; close: number }[],
+  bench: { date: string; close: number }[],
+  days: number,
+): number | null {
+  if (stock.length < days + 1) return null;
+  const startDate = stock[stock.length - 1 - days]!.date;
+  const endDate = stock[stock.length - 1]!.date;
+  const bStart = bench.find((b) => b.date === startDate);
+  const bEnd = bench.find((b) => b.date === endDate);
+  if (!bStart || !bEnd || !bStart.close) return null;
+  const s = pctChange(stock, days);
+  if (s === null) return null;
+  return round(s - (bEnd.close / bStart.close - 1) * 100);
+}
+
 /** `bars`는 **오래된 것부터** 정렬돼 있어야 한다. */
-export function computeIndicators(bars: Bar[], flows: Flow[] = []): Indicators | null {
+export function computeIndicators(
+  bars: Bar[],
+  flows: Flow[] = [],
+  benchmarks: BenchmarkSeries[] = [],
+): Indicators | null {
   if (!bars.length) return null;
   const closes = bars.map((b) => b.close);
   const n = closes.length;
@@ -150,6 +203,30 @@ export function computeIndicators(bars: Bar[], flows: Flow[] = []): Indicators |
     institution_net_20d: sum((x) => x.institution),
     individual_net_20d: sum((x) => x.individual),
     foreign_streak_days: streak,
+    relative: benchmarks.map((b) => {
+      const series = [...b.bars].sort((x, y) => x.date.localeCompare(y.date));
+      const stock = bars.map((x) => ({ date: x.date, close: x.close }));
+      const s20 = pctChange(stock, 20);
+      const b20 =
+        series.length && s20 !== null
+          ? (() => {
+              const startDate = stock[stock.length - 1 - 20]?.date;
+              const endDate = stock[stock.length - 1]?.date;
+              const bs = series.find((x) => x.date === startDate);
+              const be = series.find((x) => x.date === endDate);
+              return bs && be && bs.close ? round((be.close / bs.close - 1) * 100) : null;
+            })()
+          : null;
+      return {
+        key: b.key,
+        label: b.label,
+        excess_5d: excess(stock, series, 5),
+        excess_20d: excess(stock, series, 20),
+        excess_60d: excess(stock, series, 60),
+        stock_20d_pct: s20 === null ? null : round(s20),
+        benchmark_20d_pct: b20,
+      };
+    }),
   };
 }
 
@@ -255,6 +332,14 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
   }
   if (ind.volume_ratio !== null) {
     reasons.push(`최근 5일 거래량이 60일 평균의 ${ind.volume_ratio}배`);
+  }
+  for (const r of ind.relative) {
+    if (r.excess_20d === null) continue;
+    // 시장이 빠진 건지 이 종목이 빠진 건지 — 벤치마크 없이는 답할 수 없던 질문.
+    reasons.push(
+      `${r.label} 대비 20일 초과수익 ${r.excess_20d > 0 ? '+' : ''}${r.excess_20d}%p ` +
+        `(종목 ${r.stock_20d_pct}% vs 지수 ${r.benchmark_20d_pct}%)`,
+    );
   }
 
   const parts = [TREND_LABEL[trend]];
