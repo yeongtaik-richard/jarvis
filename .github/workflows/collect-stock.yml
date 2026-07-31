@@ -13,12 +13,16 @@ on:
     # Intraday sweep, hourly 09:00-15:00 KST weekdays (00:00-06:00 UTC). Stores a
     # separate intraday_price metric — never the daily bar, which isn't settled yet.
     - cron: '0 0-6 * * 1-5'
-  workflow_dispatch: # manual trigger for testing / one-off backfills
+  workflow_dispatch: # manual trigger for testing / one-off backfills / routine dispatch
     inputs:
       backfill_days:
         description: 'Days of history to collect (0 = latest settled day only)'
         required: false
         default: '0'
+      run_kind:
+        description: 'Collection kind override (intraday|close|premarket). Empty = manual.'
+        required: false
+        default: ''
 
 concurrency:
   group: collect-stock
@@ -49,4 +53,5 @@ jobs:
           # scheduled runs have no inputs → falls back to 0 (latest day only)
           STOCK_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || '0' }}
           # which cron fired; empty for manual runs (the collector labels those itself)
-          STOCK_RUN_KIND: ${{ github.event_name == 'schedule' && (github.event.schedule == '10 23 * * 0-4' && 'premarket' || (github.event.schedule == '0 0-6 * * 1-5' && 'intraday' || 'close')) || '' }}
+          # priority: explicit dispatch input > schedule-derived > '' (manual)
+          STOCK_RUN_KIND: ${{ github.event.inputs.run_kind || (github.event_name == 'schedule' && (github.event.schedule == '10 23 * * 0-4' && 'premarket' || (github.event.schedule == '0 0-6 * * 1-5' && 'intraday' || 'close')) || '') }}

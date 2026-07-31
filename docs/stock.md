@@ -383,11 +383,21 @@ STOCK_BACKFILL_DAYS=30 JARVIS_BASE_URL=http://localhost:3000 pnpm collect:stock
 
 ## 자동 브리핑 루틴 (Claude 클라우드)
 
-`trig_01TF1cTEXXQ4pfVCZfDAHnta` — **평일 09:30~15:30 KST 매시**(cron `30 0-6 * * 1-5` UTC).
+`trig_01TF1cTEXXQ4pfVCZfDAHnta` — **매일 08:30~19:30 KST 매시 30분**(cron `30 23,0-10 * * 0-5` UTC).
+UTC 단일 cron으로는 KST 주말 경계를 정확히 못 자르므로 토·일 슬롯 일부가 발화하는데,
+프롬프트 0단계가 KST 요일을 보고 주말이면 즉시 종료한다. 모드는 시각으로 정한다:
+**pre**(09시 이전 — 간밤 SOX·나스닥·ADR 괴리) / **intraday**(09~15시반) /
+**close**(15시반 이후 — 마감 확정치·하루 요약).
 관리·실행 로그: https://claude.ai/code/routines/trig_01TF1cTEXXQ4pfVCZfDAHnta
 (삭제는 이 화면에서만 되고 API로는 안 된다.)
 
-- 장중 수집 cron보다 **30분 뒤**에 돈다 — 같은 시각에 돌면 아직 그 시간대 데이터가 없다.
+- **데이터가 낡았으면 스스로 수집을 트리거한다.** `POST /api/stock/collect`가 GitHub
+  workflow_dispatch를 쏘고(수 초 내 시작, cron과 달리 지연 없음 — 실행 자체는 ~31초),
+  루틴은 30초 간격 폴링으로 신선한 스냅샷을 기다렸다가 브리핑한다. 2026-07-31 오전에
+  cron 지연으로 루틴이 연쇄 스킵된 것이 계기. 엔드포인트에는 GitHub PAT만 필요하고
+  **KIS 키는 여전히 GitHub Secrets에만 있다.** 남발 방지: 10분 이내 신선하면 skip,
+  3분 이내 실행 중이면 skip. `GITHUB_DISPATCH_TOKEN` 미설정이면 503 → 루틴은 기존
+  스킵 규칙으로 후퇴한다.
 - 하는 일: ①`intraday_price` 신선도 확인 ②**직전 브리핑의 "지켜볼 것"을 지금 데이터로 채점**
   ③현황·이상치·지켜볼 것 작성 ④`POST /api/stock/analysis`(`kind='intraday'`,
   `authored_by='claude-routine'`) ⑤데이터·API 한계가 있었으면 개선노트 1건.
