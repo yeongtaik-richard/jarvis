@@ -4,6 +4,7 @@ import { getCollectorHealth } from '@/lib/collector-run-service';
 import { searchMarketEvents, toApiMarketEvent } from '@/lib/market-event-service';
 import { getStockRegime } from '@/lib/stock-regime-service';
 import { predictionStats, searchPredictions, toApiPrediction } from '@/lib/prediction-service';
+import { getStockSignal } from '@/lib/stock-signal-service';
 import { PredictionQuery } from '@/lib/schemas';
 import { MarketEventQuery, StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
 import {
@@ -334,6 +335,18 @@ const FLOW_BADGE: Record<string, string> = {
   unknown: 'bg-zinc-200 text-zinc-700',
 };
 
+// 신호 배지 — 국내 관례(빨강=매수 관점, 파랑=매도 관점).
+const SIGNAL_TEXT: Record<string, string> = {
+  buy: '매수 관점',
+  sell: '매도 관점',
+  watch: '관망',
+};
+const SIGNAL_BADGE: Record<string, string> = {
+  buy: 'bg-red-100 text-red-800',
+  sell: 'bg-blue-100 text-blue-800',
+  watch: 'bg-zinc-200 text-zinc-700',
+};
+
 const PRED_TEXT: Record<string, string> = {
   pending: '대기',
   confirmed: '확인됨',
@@ -373,7 +386,7 @@ export default async function StockDashboardPage() {
 
   // 추이 차트용 이력 — 대시보드는 단일 종목이라 최신 스냅샷의 symbol을 따른다.
   const symbol = items[0]?.symbol ?? '000660';
-  const [ohlcvRows, flowRows, health, eventRows, regimeResult, predRows, predStats] = await Promise.all([
+  const [ohlcvRows, flowRows, health, eventRows, regimeResult, predRows, predStats, signalResult] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', HISTORY_DAYS),
     getStockHistory(symbol, 'investor_flow', HISTORY_DAYS),
     getCollectorHealth(symbol),
@@ -381,6 +394,7 @@ export default async function StockDashboardPage() {
     getStockRegime(symbol),
     searchPredictions(PredictionQuery.parse({ symbol, limit: 8 })),
     predictionStats(symbol),
+    getStockSignal(symbol),
   ]);
   const events = eventRows.map(toApiMarketEvent);
   const closePoints: ClosePoint[] = ohlcvRows
@@ -464,6 +478,47 @@ export default async function StockDashboardPage() {
               . KRX 공휴일이면 정상입니다 — 스케줄은 휴장일을 모릅니다.
             </p>
           </div>
+        )}
+
+        {signalResult.signal && (
+          <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="font-medium">규칙 신호</h2>
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                미검증
+              </span>
+              <span
+                className={`text-sm px-2.5 py-0.5 rounded font-medium ${SIGNAL_BADGE[signalResult.signal.signal]}`}
+              >
+                {SIGNAL_TEXT[signalResult.signal.signal]}
+              </span>
+              <span className="text-xs text-zinc-400 tabular-nums">
+                score {signalResult.signal.score >= 0 ? '+' : ''}{signalResult.signal.score}/{signalResult.signal.max_score}
+                {signalResult.signal.gated_by_volatility ? ' · 변동성 극단으로 관망 강등' : ''}
+              </span>
+              <span className="text-xs text-zinc-400 ml-auto tabular-nums">
+                directional 적중률{' '}
+                {signalResult.directional.scored > 0
+                  ? `${Math.round((signalResult.directional.hit_rate ?? 0) * 100)}% (표본 ${signalResult.directional.scored})`
+                  : `표본 없음 (대기 ${signalResult.directional.pending})`}
+              </span>
+            </div>
+            <ul className="text-xs text-zinc-600 dark:text-zinc-400 space-y-0.5 tabular-nums">
+              {signalResult.signal.components.map((c) => (
+                <li key={c.key}>
+                  {c.value > 0 ? '▲' : c.value < 0 ? '▼' : '·'} {c.reason}
+                </li>
+              ))}
+              {signalResult.target?.comparator && signalResult.reference_close !== null && (
+                <li className="text-zinc-400">
+                  검증 조건: {signalResult.target.bucket} 종가가 기준({signalResult.as_of} ·{' '}
+                  {won(signalResult.reference_close)})보다{' '}
+                  {signalResult.target.comparator === 'gt' ? '높은지' : '낮은지'} — 자동 채점됨
+                </li>
+              )}
+            </ul>
+            <p className="text-[11px] text-zinc-400 pt-1">{signalResult.signal.disclaimer}</p>
+          </section>
         )}
 
         {regimeResult.regime && regimeResult.indicators && (

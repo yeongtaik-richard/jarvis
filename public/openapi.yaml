@@ -23,7 +23,7 @@ info:
     /api/stock/*: 별도 기능 — SK하이닉스(000660) 매매 **참고정보** 애그리게이터.
     수집기가 저장한 수급·일봉·외국인보유 스냅샷을 읽고, 그 값에 근거한 브리핑을 남긴다.
     자동매매·수익예측이 아니다. 매수/매도/목표가/등급은 스키마에 없고, 검증되지 않은 방향성 주장은 API가 거부한다.
-  version: '1.6.0'
+  version: '1.7.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -1055,6 +1055,62 @@ paths:
         - { name: symbol, in: query, schema: { type: string, default: '000660' } }
       responses:
         '200': { description: 통계, content: { application/json: { schema: { $ref: '#/components/schemas/PredictionStats' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/stock/signal:
+    get:
+      operationId: getStockSignal
+      x-openai-isConsequential: false
+      summary: 규칙 기반 방향성 신호 (미검증 — 매매 지시 아님)
+      description: |
+        추세·수급·SOX 상대강도 3개 컴포넌트(각 ±1)의 합으로 buy/sell/watch를 내는 **결정론적 규칙**이다.
+        변동성 극단(이력 90%ile 이상) 구간에서는 만점이 아니면 watch로 강등된다.
+        - **미검증 신호다.** 인용할 때 반드시 directional 적중률(표본 수 포함)과 disclaimer를 함께 전달하라.
+        - 사용자에게 "사라/팔라"로 번역하지 마라. "규칙 신호는 X, 단 미검증(표본 N)"이 정직한 전달이다.
+        - 신호는 마감 후 자동으로 directional 예측(5거래일 지평)으로 기록돼 채점된다.
+      parameters:
+        - { name: symbol, in: query, schema: { type: string, default: '000660' } }
+      responses:
+        '200':
+          description: 신호와 근거, directional 적중률
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbol: { type: string }
+                  as_of: { type: [string, 'null'], description: 기준 종가의 거래일 }
+                  reference_close: { type: [number, 'null'] }
+                  signal:
+                    type: [object, 'null']
+                    properties:
+                      signal: { type: string, enum: [buy, sell, watch] }
+                      score: { type: integer }
+                      max_score: { type: integer }
+                      components:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            key: { type: string }
+                            value: { type: integer }
+                            reason: { type: string }
+                      gated_by_volatility: { type: boolean }
+                      disclaimer: { type: string }
+                  target:
+                    type: [object, 'null']
+                    properties:
+                      bucket: { type: string }
+                      comparator: { type: [string, 'null'] }
+                  directional:
+                    type: object
+                    description: 규칙 신호의 과거 적중률. hit_rate는 scored(표본)와 함께만 인용.
+                    properties:
+                      pending: { type: integer }
+                      confirmed: { type: integer }
+                      refuted: { type: integer }
+                      scored: { type: integer }
+                      hit_rate: { type: [number, 'null'] }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/stock/decision:

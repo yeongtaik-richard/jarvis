@@ -574,6 +574,22 @@ async function main(): Promise<void> {
   if (!backfill) await collectEvents(apiToken, runId, errors);
 
   await flush(apiToken, runId, kind, queue, errors);
+
+  // 5) 마감 수집이 성공했으면(위 flush는 실패 시 exit) 오늘 신호를 기록한다.
+  //    LLM 세션에 맡기지 않는 이유: 신호 기록은 결정론적이어야 하고, 루틴이 안 떠도
+  //    표본이 쌓여야 한다. 서버가 watch/중복이면 알아서 기록하지 않는다.
+  if (kind === 'close' && !backfill) {
+    try {
+      const res = await fetch(`${BASE}/api/stock/signal?symbol=${SYMBOL}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${apiToken}` },
+      });
+      const body = (await res.json()) as { recorded?: boolean; reason?: string };
+      console.log(`[collect] signal ${res.status} recorded=${body.recorded} (${body.reason})`);
+    } catch (e) {
+      console.warn(`[collect] signal record failed: ${String(e)}`); // 신호 실패가 수집을 망치지 않게
+    }
+  }
 }
 
 /** 모아둔 스냅샷을 오래된 순으로 POST하고, 실행 결과를 보고하고, 실패면 non-zero로 끝낸다. */
