@@ -195,8 +195,8 @@ function metricRows(item: ApiStockSnapshot): Row[] {
       { label: '저가', value: num('low') === null ? '—' : won(num('low')!) },
       { label: '누적 거래량', value: vol === null ? '—' : korQty(vol, '주') },
       { label: '누적 거래대금', value: amount === null ? '—' : moneyKrw(amount) },
-      flowQtyRow('외국인 순매수', num('foreign_net_qty')),
-      flowQtyRow('프로그램 순매수', num('program_net_qty')),
+      flowQtyRow('외국인 순매수(주)', num('foreign_net_qty')),
+      flowQtyRow('프로그램 순매수(주)', num('program_net_qty')),
       { label: '공매도 체결', value: num('short_qty') === null ? '—' : korQty(num('short_qty')!, '주') },
       {
         label: '대차잔고 비율',
@@ -423,6 +423,19 @@ function kstTime(iso: string | null): string {
     dateStyle: 'short',
     timeStyle: 'short',
   });
+}
+
+/**
+ * 카드가 "언제 것"인지 제목 바로 밑에 명시한다. 같은 '외국인 순매수' 라벨이
+ * 장중 카드(오늘·수량)와 수급 카드(전 거래일 마감·대금)에 동시에 있어서,
+ * 기준일이 푸터 작은 글씨에만 있으면 두 값이 모순처럼 읽힌다 (2026-08-03 실제 혼동).
+ */
+function cardBasis(i: ApiStockSnapshot): string {
+  const d = i.trading_date_kst ?? i.bucket_key.slice(0, 10);
+  if (i.metric === 'intraday_price') return `${d} 장중 누적 · 수량 기준`;
+  if (i.metric === 'foreign_holding') return `${d} 기준`;
+  if (i.metric === 'investor_flow') return `${d} 마감 확정 · 대금 기준`;
+  return `${d} 마감 확정`;
 }
 
 function payloadNum(payload: unknown, key: string): number {
@@ -726,7 +739,7 @@ export default async function StockDashboardPage() {
                   key={i.id}
                   className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4"
                 >
-                  <div className="flex items-baseline justify-between gap-2 mb-3">
+                  <div className="flex items-baseline justify-between gap-2">
                     <h2 className="font-medium">
                       {METRIC_LABEL[i.metric] ?? i.metric}
                     </h2>
@@ -736,6 +749,7 @@ export default async function StockDashboardPage() {
                       {agoText(mins)}
                     </span>
                   </div>
+                  <div className="text-[11px] text-zinc-400 mb-3">{cardBasis(i)}</div>
                   <dl className="space-y-1.5 text-sm">
                     {metricRows(i).map((r) => (
                       <div key={r.label} className="flex justify-between gap-3">
