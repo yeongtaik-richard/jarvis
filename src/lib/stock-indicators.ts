@@ -500,3 +500,37 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
       '과거 데이터의 서술이다. 앞으로의 방향을 뜻하지 않으며 매매 판단이 아니다.',
   };
 }
+
+// ── 주간 관점 ──────────────────────────────────────────────────────────
+
+export interface WeeklyChange {
+  week_start: string; // 그 주 첫 거래일(월요일 기준 키)
+  close: number; // 주 마지막 확정 종가
+  chg_pct: number | null; // 전주 종가 대비
+}
+
+/** ISO 주 키 (월요일 기준). */
+function weekKey(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() - day + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 주 단위 등락 — 각 주의 마지막 확정 종가 기준. `bars`는 오래된→최신. */
+export function computeWeeklyChanges(bars: Bar[], weeks = 8): WeeklyChange[] {
+  const byWeek = new Map<string, Bar>();
+  for (const b of bars) byWeek.set(weekKey(b.date), b);
+  const entries = [...byWeek.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const out: WeeklyChange[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const [wk, bar] = entries[i]!;
+    const prev = entries[i - 1]?.[1];
+    out.push({
+      week_start: wk,
+      close: bar.close,
+      chg_pct: prev ? round((bar.close / prev.close - 1) * 100) : null,
+    });
+  }
+  return out.slice(-weeks);
+}

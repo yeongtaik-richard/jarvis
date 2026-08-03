@@ -2,7 +2,20 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { stockPredictions } from '@/db/schema';
 import { createPrediction, toApiPrediction, type ApiPrediction } from './prediction-service';
-import { computeSignal, type RuleSignal } from './stock-signal';
+import {
+  computeSignal,
+  computeSignalSeries,
+  type RuleSignal,
+  type SignalBacktest,
+  type SignalSeriesPoint,
+} from './stock-signal';
+import {
+  computeWeeklyChanges,
+  type Bar,
+  type BenchmarkSeries,
+  type Flow,
+  type WeeklyChange,
+} from './stock-indicators';
 import { getStockRegime } from './stock-regime-service';
 import { getStockHistory } from './stock-service';
 import { HttpError } from './errors';
@@ -28,6 +41,12 @@ export type SignalResult = {
   /** 신호가 채점될 조건 (buy/sell일 때만 의미) */
   target: { bucket: string; comparator: 'gt' | 'lt' | null } | null;
   directional: DirectionalStats;
+  /** 주 단위 등락 (마지막 확정 종가 기준) */
+  weekly: WeeklyChange[];
+  /** 규칙 점수를 과거에 재적용한 시계열 (최근 90거래일) */
+  score_series: SignalSeriesPoint[];
+  /** 인샘플 백테스트 — 실전 성적 아님. note 문구와 함께만 인용할 것. */
+  backtest: SignalBacktest;
 };
 
 function kstDatePlus(days: number): string {
@@ -62,13 +81,50 @@ async function directionalStats(symbol: string): Promise<DirectionalStats> {
   };
 }
 
-/** 신호 계산 + directional 적중률. **부작용 없음** — 대시보드·조회용. */
+const num = (payload: unknown, key: string): number => {
+  const v = Number((payload as Record<string, unknown> | null)?.[key]);
+  return Number.isFinite(v) ? v : NaN;
+};
+
+/** 신호 계산 + directional 적중률 + 주간 관점(점수 시계열·백테스트). **부작용 없음**. */
 export async function getStockSignal(symbol: string): Promise<SignalResult> {
   const { indicators, regime } = await getStockRegime(symbol);
   const signal = computeSignal(indicators, regime);
 
-  const [latest] = await getStockHistory(symbol, 'daily_ohlcv', 1);
-  const close = latest ? Number((latest.payload as Record<string, unknown>).close) : NaN;
+  const [ohlcv, flowRows, soxRows] = await Promise.all([
+    getStockHistory(symbol, 'daily_ohlcv', 320),
+    getStockHistory(symbol, 'investor_flow', 60),
+    getStockHistory(symbol, 'benchmark_sox', 320),
+  ]);
+  const bars: Bar[] = ohlcv
+    .map((r) => ({
+      date: r.bucketKey,
+      close: num(r.payload, 'close'),
+      high: num(r.payload, 'high'),
+      low: num(r.payload, 'low'),
+      volume: num(r.payload, 'volume'),
+    }))
+    .filter((b) => Number.isFinite(b.close));
+  const flows: Flow[] = flowRows
+    .map((r) => ({
+      date: r.bucketKey,
+      foreign: num(r.payload, 'foreign_net'),
+      institution: num(r.payload, 'institution_net'),
+      individual: num(r.payload, 'individual_net'),
+    }))
+    .filter((f) => Number.isFinite(f.foreign));
+  const sox: BenchmarkSeries = {
+    key: 'sox',
+    label: '필라델피아 반도체(SOX)',
+    containsStock: false,
+    bars: soxRows
+      .map((r) => ({ date: r.bucketKey, close: num(r.payload, 'close') }))
+      .filter((x) => Number.isFinite(x.close) && x.close > 0),
+  };
+  const { series, backtest } = computeSignalSeries(bars, flows, [sox]);
+
+  const latest = ohlcv[ohlcv.length - 1];
+  const close = latest ? num(latest.payload, 'close') : NaN;
 
   const bucket = kstDatePlus(HORIZON_CALENDAR_DAYS);
   return {
@@ -83,6 +139,9 @@ export async function getStockSignal(symbol: string): Promise<SignalResult> {
           ? { bucket, comparator: null }
           : null,
     directional: await directionalStats(symbol),
+    weekly: computeWeeklyChanges(bars, 8),
+    score_series: series.slice(-90),
+    backtest,
   };
 }
 

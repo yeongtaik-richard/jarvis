@@ -11,7 +11,15 @@
  * 규칙은 전부 이 파일의 상수다. 바꾸면 신호가 바뀌므로 커밋에 근거를 남길 것.
  */
 
-import type { Indicators, Regime } from './stock-indicators';
+import {
+  classifyRegime,
+  computeIndicators,
+  type Bar,
+  type BenchmarkSeries,
+  type Flow,
+  type Indicators,
+  type Regime,
+} from './stock-indicators';
 
 export type SignalValue = 'buy' | 'sell' | 'watch';
 
@@ -101,5 +109,102 @@ export function computeSignal(
     components,
     gated_by_volatility: gated,
     disclaimer: SIGNAL_DISCLAIMER,
+  };
+}
+
+// ── 점수 시계열 + 백테스트 ──────────────────────────────────────────────
+
+export interface SignalSeriesPoint {
+  date: string;
+  score: number;
+  signal: SignalValue;
+  gated: boolean;
+}
+
+export interface SignalBacktest {
+  horizon_days: number;
+  buy: { n: number; hits: number; hit_rate: number | null };
+  sell: { n: number; hits: number; hit_rate: number | null };
+  /**
+   * 기저율: 같은 구간에서 **아무 날이나** 잡아도 5거래일 뒤 종가가 올랐을 확률.
+   * 적중률은 이것과의 차이로만 의미가 있다 — 상승장에서는 무작위 매수도 60%가 나온다.
+   */
+  baseline_up_rate: number | null;
+  note: string;
+}
+
+/**
+ * 규칙 점수를 과거 각 거래일에 재적용한 시계열 + 5거래일 지평 백테스트.
+ *
+ * **룩어헤드 방지가 이 함수의 존재 이유다**: i일의 점수는 i일까지의 일봉·수급·벤치마크만
+ * 잘라서 계산한다. 백테스트 조건은 recordStockSignal과 동일 — 신호일 종가 대비
+ * 5거래일 뒤 종가의 방향.
+ *
+ * 한계(표시 문구에 반드시 포함): ① 인샘플 — 임계값을 이 데이터를 보며 정했다.
+ * ② 수급 이력이 30거래일뿐이라 그 이전 구간은 수급 컴포넌트가 0이다.
+ */
+export function computeSignalSeries(
+  bars: Bar[],
+  flows: Flow[],
+  benchmarks: BenchmarkSeries[],
+  opts: { minWindow?: number; horizon?: number } = {},
+): { series: SignalSeriesPoint[]; backtest: SignalBacktest } {
+  const minWindow = opts.minWindow ?? 80;
+  const horizon = opts.horizon ?? 5;
+  const series: SignalSeriesPoint[] = [];
+  const sortedFlows = [...flows].sort((a, b) => a.date.localeCompare(b.date));
+
+  for (let i = minWindow; i < bars.length; i++) {
+    const date = bars[i]!.date;
+    const upto = bars.slice(0, i + 1);
+    const flowsUpto = sortedFlows.filter((f) => f.date <= date);
+    const benchUpto = benchmarks.map((b) => ({
+      ...b,
+      bars: b.bars.filter((x) => x.date <= date),
+    }));
+    const ind = computeIndicators(upto, flowsUpto, benchUpto);
+    const regime = classifyRegime(ind);
+    const sig = computeSignal(ind, regime);
+    if (sig) {
+      series.push({ date, score: sig.score, signal: sig.signal, gated: sig.gated_by_volatility });
+    }
+  }
+
+  const closes = bars.map((b) => b.close);
+  const indexByDate = new Map(bars.map((b, idx) => [b.date, idx]));
+  const buy = { n: 0, hits: 0, hit_rate: null as number | null };
+  const sell = { n: 0, hits: 0, hit_rate: null as number | null };
+
+  // 기저율 — 시계열이 커버하는 구간에서 5거래일 상승 비율
+  let baseN = 0;
+  let baseUp = 0;
+  for (const pt of series) {
+    const idx = indexByDate.get(pt.date)!;
+    if (idx + horizon >= closes.length) continue;
+    baseN++;
+    if (closes[idx + horizon]! > closes[idx]!) baseUp++;
+  }
+  for (const pt of series) {
+    if (pt.signal === 'watch') continue;
+    const idx = indexByDate.get(pt.date)!;
+    if (idx + horizon >= closes.length) continue; // 결과가 아직 없는 신호
+    const entry = closes[idx]!;
+    const exit = closes[idx + horizon]!;
+    const bucket = pt.signal === 'buy' ? buy : sell;
+    bucket.n++;
+    if ((pt.signal === 'buy' && exit > entry) || (pt.signal === 'sell' && exit < entry)) bucket.hits++;
+  }
+  buy.hit_rate = buy.n > 0 ? Number((buy.hits / buy.n).toFixed(3)) : null;
+  sell.hit_rate = sell.n > 0 ? Number((sell.hits / sell.n).toFixed(3)) : null;
+
+  return {
+    series,
+    backtest: {
+      horizon_days: horizon,
+      buy,
+      sell,
+      baseline_up_rate: baseN > 0 ? Number((baseUp / baseN).toFixed(3)) : null,
+      note: '과거 데이터에 같은 규칙을 재적용한 인샘플 백테스트다. 실전 성적이 아니며, 수급 컴포넌트는 이력이 있는 최근 구간만 반영된다.',
+    },
   };
 }

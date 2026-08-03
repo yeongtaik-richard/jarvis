@@ -5,6 +5,7 @@ import { searchMarketEvents, toApiMarketEvent } from '@/lib/market-event-service
 import { getStockRegime } from '@/lib/stock-regime-service';
 import { predictionStats, searchPredictions, toApiPrediction } from '@/lib/prediction-service';
 import { getStockSignal } from '@/lib/stock-signal-service';
+import type { SignalSeriesPoint } from '@/lib/stock-signal';
 import { PredictionQuery } from '@/lib/schemas';
 import { MarketEventQuery, StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
 import {
@@ -416,6 +417,47 @@ const PRED_BADGE: Record<string, string> = {
   unverifiable: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
 };
 
+/**
+ * 규칙 점수(-3~+3) 추이 스파크라인. 서버 SVG — 인터랙션 없음, 값은 백테스트 줄과
+ * 시계열 API로 읽을 수 있다. 색 토큰은 globals.css `.viz`.
+ */
+function ScoreSparkline({ points }: { points: SignalSeriesPoint[] }) {
+  if (points.length < 2) return null;
+  const W = 320;
+  const H = 56;
+  const padX = 4;
+  const y = (score: number) => 28 - (score / 3) * 22; // +3→6, 0→28, -3→50
+  const x = (i: number) => padX + (i / (points.length - 1)) * (W - padX * 2);
+  const line = points.map((p, i) => `${i ? 'L' : 'M'} ${x(i).toFixed(1)} ${y(p.score).toFixed(1)}`).join(' ');
+  return (
+    <div className="viz">
+      <svg
+        width="100%"
+        height={H}
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label={`규칙 점수 추이, 최근 ${points.length}거래일, 범위 -3에서 +3`}
+      >
+        <line x1={padX} x2={W - padX} y1={28} y2={28} stroke="var(--viz-axis)" strokeWidth="1" />
+        <path d={line} fill="none" stroke="var(--viz-line)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {points.map((p, i) =>
+          p.signal !== 'watch' ? (
+            <circle
+              key={p.date}
+              cx={x(i)}
+              cy={y(p.score)}
+              r="3.5"
+              fill={p.signal === 'buy' ? 'var(--viz-up)' : 'var(--viz-down)'}
+              stroke="var(--viz-surface)"
+              strokeWidth="1.5"
+            />
+          ) : null,
+        )}
+      </svg>
+    </div>
+  );
+}
+
 function kstTime(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('ko-KR', {
@@ -610,7 +652,10 @@ export default async function StockDashboardPage() {
         {signalResult.signal && (
           <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="font-medium">규칙 신호</h2>
+              <h2 className="font-medium">
+                규칙 신호{' '}
+                <span className="text-xs font-normal text-zinc-400">주간 관점 · 5거래일 지평</span>
+              </h2>
               <span
                 className={`text-sm px-2.5 py-1 rounded font-medium ${SIGNAL_BADGE[signalResult.signal.signal]}`}
               >
@@ -643,8 +688,52 @@ export default async function StockDashboardPage() {
                 </li>
               )}
             </ul>
+            {signalResult.weekly.length > 1 && (
+              <div>
+                <div className="text-[11px] text-zinc-400 mb-1">주간 등락 (마지막 확정 종가 기준)</div>
+                <div className="flex gap-1.5 flex-wrap text-[11px] tabular-nums">
+                  {signalResult.weekly.map((w) => (
+                    <span
+                      key={w.week_start}
+                      className={`px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-900 ${
+                        w.chg_pct === null
+                          ? 'text-zinc-500'
+                          : w.chg_pct >= 0
+                            ? toneClass.pos
+                            : toneClass.neg
+                      }`}
+                    >
+                      {w.week_start.slice(5).replace('-', '/')}주{' '}
+                      {w.chg_pct === null ? '—' : `${w.chg_pct >= 0 ? '+' : ''}${w.chg_pct}%`}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {signalResult.score_series.length > 1 && (
+              <div>
+                <div className="text-[11px] text-zinc-400 mb-1">
+                  규칙 점수 추이 (최근 {signalResult.score_series.length}거래일, -3~+3 · 점 = 신호 발생일)
+                </div>
+                <ScoreSparkline points={signalResult.score_series} />
+              </div>
+            )}
+            <div className="text-xs text-zinc-500 dark:text-zinc-400 tabular-nums">
+              인샘플 백테스트({signalResult.backtest.horizon_days}거래일 지평): 상방{' '}
+              {signalResult.backtest.buy.n}회 적중{' '}
+              {signalResult.backtest.buy.hit_rate !== null
+                ? `${Math.round(signalResult.backtest.buy.hit_rate * 100)}%`
+                : '—'}{' '}
+              — 기저율(무작위 매수){' '}
+              {signalResult.backtest.baseline_up_rate !== null
+                ? `${Math.round(signalResult.backtest.baseline_up_rate * 100)}%`
+                : '—'}{' '}
+              · 하방 {signalResult.backtest.sell.n > 0
+                ? `${signalResult.backtest.sell.n}회 적중 ${Math.round((signalResult.backtest.sell.hit_rate ?? 0) * 100)}%`
+                : '표본 없음(최근 발생분 채점 전)'}
+            </div>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 pt-1">
-              {signalResult.signal.disclaimer}
+              {signalResult.signal.disclaimer} {signalResult.backtest.note}
             </p>
           </section>
         )}

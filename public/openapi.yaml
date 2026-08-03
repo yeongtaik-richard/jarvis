@@ -23,7 +23,7 @@ info:
     /api/stock/*: 별도 기능 — SK하이닉스(000660) 매매 **참고정보** 애그리게이터.
     수집기가 저장한 수급·일봉·외국인보유 스냅샷을 읽고, 그 값에 근거한 브리핑을 남긴다.
     자동매매·수익예측이 아니다. 매수/매도/목표가/등급은 스키마에 없고, 검증되지 않은 방향성 주장은 API가 거부한다.
-  version: '1.8.0'
+  version: '1.9.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -1120,13 +1120,54 @@ paths:
                       comparator: { type: [string, 'null'] }
                   directional:
                     type: object
-                    description: 규칙 신호의 과거 적중률. hit_rate는 scored(표본)와 함께만 인용.
+                    description: 규칙 신호의 실전 적중률. hit_rate는 scored(표본)와 함께만 인용.
                     properties:
                       pending: { type: integer }
                       confirmed: { type: integer }
                       refuted: { type: integer }
                       scored: { type: integer }
                       hit_rate: { type: [number, 'null'] }
+                  weekly:
+                    type: array
+                    description: 주 단위 등락 (마지막 확정 종가 기준, 최근 8주)
+                    items:
+                      type: object
+                      properties:
+                        week_start: { type: string }
+                        close: { type: number }
+                        chg_pct: { type: [number, 'null'] }
+                  score_series:
+                    type: array
+                    description: 규칙 점수를 과거에 재적용한 시계열 (최근 90거래일)
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string }
+                        score: { type: integer }
+                        signal: { type: string, enum: [buy, sell, watch] }
+                        gated: { type: boolean }
+                  backtest:
+                    type: object
+                    description: |
+                      **인샘플 백테스트 — 실전 성적이 아니다.** 인용할 때 반드시
+                      baseline_up_rate(기저율)와 note를 함께 전달할 것. 적중률은 기저율과의
+                      차이로만 의미가 있다 — 상승장에서는 무작위 매수도 60%가 나온다.
+                    properties:
+                      horizon_days: { type: integer }
+                      buy:
+                        type: object
+                        properties:
+                          n: { type: integer }
+                          hits: { type: integer }
+                          hit_rate: { type: [number, 'null'] }
+                      sell:
+                        type: object
+                        properties:
+                          n: { type: integer }
+                          hits: { type: integer }
+                          hit_rate: { type: [number, 'null'] }
+                      baseline_up_rate: { type: [number, 'null'] }
+                      note: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/stock/decision:
