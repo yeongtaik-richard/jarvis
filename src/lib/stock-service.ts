@@ -113,22 +113,21 @@ export async function searchStockSnapshots(
   if (query.source) filters.push(eq(stockSnapshots.source, query.source));
   const whereExpr = filters.length ? and(...filters) : undefined;
 
+  if (query.latest) {
+    // DISTINCT ON — 이전엔 captured_at 최신 500행 창에서 JS로 dedupe했는데, 대량 백필
+    // 직후엔 그 창이 백필 행으로만 차서 다른 metric의 대표가 통째로 사라졌다
+    // (2026-08-03 실제 발생: 13개 metric 중 4개만 표시). DB가 metric별 최신을 고르게 한다.
+    const base = db
+      .selectDistinctOn([stockSnapshots.symbol, stockSnapshots.metric])
+      .from(stockSnapshots);
+    const filtered = whereExpr ? base.where(whereExpr) : base;
+    const rows = await filtered
+      .orderBy(stockSnapshots.symbol, stockSnapshots.metric, desc(stockSnapshots.capturedAt))
+      .limit(query.limit);
+    return rows;
+  }
+
   const base = db.select().from(stockSnapshots);
   const filtered = whereExpr ? base.where(whereExpr) : base;
-  const rows = await filtered
-    .orderBy(desc(stockSnapshots.capturedAt))
-    .limit(query.latest ? 500 : query.limit);
-
-  if (!query.latest) return rows;
-
-  // latest per (symbol, metric); rows already newest-first.
-  const seen = new Set<string>();
-  const out: StockSnapshot[] = [];
-  for (const r of rows) {
-    const k = `${r.symbol}|${r.metric}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(r);
-  }
-  return out.slice(0, query.limit);
+  return filtered.orderBy(desc(stockSnapshots.capturedAt)).limit(query.limit);
 }

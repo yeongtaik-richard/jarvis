@@ -457,6 +457,13 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
   if (ind.volume_ratio !== null) {
     reasons.push(`최근 5일 거래량이 60일 평균의 ${ind.volume_ratio}배`);
   }
+  for (const f of ind.fx) {
+    if (f.chg_5d_pct === null) continue;
+    reasons.push(
+      `${f.label} ${f.close.toLocaleString('ko-KR')} (${f.as_of}), 5일 ${f.chg_5d_pct > 0 ? '+' : ''}${f.chg_5d_pct}%${f.reading ? ` — ${f.reading}` : ''}`,
+    );
+  }
+
   // 종목이 안 들어간 벤치마크를 먼저 보여준다 — 이쪽이 액면대로 읽을 수 있는 값이다.
   for (const r of [...ind.relative].sort((a, b) => Number(a.contains_stock) - Number(b.contains_stock))) {
     if (r.excess_20d === null) continue;
@@ -469,13 +476,6 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
     } else {
       reasons.push(base);
     }
-  }
-
-  for (const f of ind.fx) {
-    if (f.chg_5d_pct === null) continue;
-    reasons.push(
-      `${f.label} ${f.close.toLocaleString('ko-KR')} (${f.as_of}), 5일 ${f.chg_5d_pct > 0 ? '+' : ''}${f.chg_5d_pct}%${f.reading ? ` — ${f.reading}` : ''}`,
-    );
   }
 
   const parts = [TREND_LABEL[trend]];

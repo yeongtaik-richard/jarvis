@@ -32,10 +32,24 @@ export const runtime = 'nodejs';
 function minutesAgo(iso: string, now: number): number {
   return Math.round((now - new Date(iso).getTime()) / 60000);
 }
-function freshnessBadge(mins: number): string {
-  if (mins < 20) return 'bg-emerald-100 text-emerald-800';
-  if (mins < 24 * 60) return 'bg-amber-100 text-amber-800';
-  return 'bg-rose-100 text-rose-800';
+/** 평일 09:00~15:30 KST인가 — 신선도 경고는 장중에만 의미가 있다. */
+function isMarketHoursKst(now: number): boolean {
+  const kst = new Date(now + 9 * 3_600_000);
+  const dow = kst.getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  const min = kst.getUTCHours() * 60 + kst.getUTCMinutes();
+  return min >= 9 * 60 && min <= 15 * 60 + 30;
+}
+/**
+ * 장외·주말에는 금요일 마감 데이터가 "이틀 전"이어도 정상이라 경고색을 쓰지 않는다.
+ * rose는 쓰지 않는다 — 빨강 계열은 가격·수급 방향(상승/순매수)에 예약돼 있어서
+ * 상태 경고에 섞으면 관례와 충돌한다 (codex 리뷰 반영).
+ */
+function freshnessBadge(mins: number, marketOpen: boolean): string {
+  if (!marketOpen) return 'bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400';
+  if (mins < 20) return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300';
+  if (mins < 90) return 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300';
+  return 'bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200';
 }
 function agoText(mins: number): string {
   if (mins < 1) return '방금';
@@ -52,6 +66,20 @@ const METRIC_LABEL: Record<string, string> = {
   intraday_price: '장중 현재가',
   valuation: '밸류에이션 · 기준선',
 };
+
+/**
+ * 카드 그리드에 올리는 metric과 그 **고정 순서**. captured_at 순서로 돌리면 카드
+ * 위치가 수집 시점마다 흔들리고, benchmark_*·fx_*·adr_price 같은 보조 시계열이
+ * 영문 키 그대로 원시 카드로 노출됐다 (2026-08-03 리뷰). 보조 시계열은 이미
+ * 국면·추이 섹션에 반영되므로 그리드에서 제외한다.
+ */
+const CARD_METRICS = [
+  'intraday_price',
+  'investor_flow',
+  'daily_ohlcv',
+  'valuation',
+  'foreign_holding',
+] as const;
 
 type Tone = 'pos' | 'neg' | 'neutral';
 type Row = { label: string; value: string; tone?: Tone; sub?: string };
@@ -200,7 +228,11 @@ function metricRows(item: ApiStockSnapshot): Row[] {
         value: lo === null ? '—' : won(lo),
         sub: p.w52_low_date ? String(p.w52_low_date) : undefined,
       },
-      { label: '250일 고/저', value: num('d250_high') === null ? '—' : `${korQty(num('d250_high')!)} / ${korQty(num('d250_low')!)}` },
+      {
+        label: '250일 고/저',
+        value:
+          num('d250_high') === null ? '—' : `${won(num('d250_high')!)} / ${won(num('d250_low')!)}`,
+      },
       { label: '거래량 회전율', value: num('turnover_rate') === null ? '—' : `${num('turnover_rate')}%` },
       { label: '업종', value: p.sector ? String(p.sector) : '—' },
     ];
@@ -238,10 +270,10 @@ const CLAIM_LABEL: Record<string, string> = {
   validated_directional: '검증된 방향성',
 };
 function claimBadge(ct: string): string {
-  if (ct === 'anomaly') return 'bg-amber-100 text-amber-800';
-  if (ct === 'risk') return 'bg-rose-100 text-rose-800';
-  if (ct === 'scenario') return 'bg-blue-100 text-blue-800';
-  return 'bg-zinc-200 text-zinc-700';
+  if (ct === 'anomaly') return 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300';
+  if (ct === 'risk') return 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300';
+  if (ct === 'scenario') return 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300';
+  return 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300';
 }
 const KIND_LABEL: Record<string, string> = {
   pre: '프리마켓',
@@ -249,6 +281,9 @@ const KIND_LABEL: Record<string, string> = {
   close: '마감',
   ondemand: '온디맨드',
 };
+
+/** 루틴 브리핑은 3화면짜리 벽텍스트가 되기 쉽다 — 앞부분만 보이고 나머지는 접는다. */
+const BRIEFING_PREVIEW_LINES = 14;
 
 function BriefingCard({
   a,
@@ -260,6 +295,8 @@ function BriefingCard({
   prominent?: boolean;
 }) {
   const mins = minutesAgo(a.created_at, now);
+  const lines = a.body.split('\n');
+  const collapsible = lines.length > BRIEFING_PREVIEW_LINES + 4;
   return (
     <div
       className={`rounded-lg border p-4 ${prominent ? 'border-zinc-300 dark:border-zinc-700' : 'border-zinc-200 dark:border-zinc-800'}`}
@@ -272,7 +309,23 @@ function BriefingCard({
         <span className="text-xs text-zinc-400 ml-auto">{agoText(mins)}</span>
       </div>
       {a.title && <div className="font-medium mb-1">{a.title}</div>}
-      <div className="text-sm whitespace-pre-wrap leading-relaxed">{a.body}</div>
+      {collapsible ? (
+        <>
+          <div className="text-sm whitespace-pre-wrap leading-relaxed">
+            {lines.slice(0, BRIEFING_PREVIEW_LINES).join('\n')}
+          </div>
+          <details>
+            <summary className="cursor-pointer select-none text-xs text-zinc-500 py-2">
+              전체 브리핑 보기
+            </summary>
+            <div className="text-sm whitespace-pre-wrap leading-relaxed">
+              {lines.slice(BRIEFING_PREVIEW_LINES).join('\n')}
+            </div>
+          </details>
+        </>
+      ) : (
+        <div className="text-sm whitespace-pre-wrap leading-relaxed">{a.body}</div>
+      )}
       <div className="mt-2 text-[11px] text-zinc-400">
         {a.authored_by} · {a.symbol} · 예측 아님(참고용)
       </div>
@@ -289,10 +342,10 @@ const RUN_KIND_LABEL: Record<string, string> = {
   manual: '수동',
 };
 const RUN_STATUS_BADGE: Record<string, string> = {
-  ok: 'bg-emerald-100 text-emerald-800',
-  running: 'bg-blue-100 text-blue-800',
-  partial: 'bg-amber-100 text-amber-800',
-  error: 'bg-rose-100 text-rose-800',
+  ok: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
+  running: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  partial: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  error: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
 };
 
 // 국면 배지. 추세 색은 국내 관례(빨강=상승, 파랑=하락), 변동성은 상태색(중립→경고).
@@ -303,10 +356,10 @@ const TREND_TEXT: Record<string, string> = {
   unknown: '추세 판단 불가',
 };
 const TREND_BADGE: Record<string, string> = {
-  up: 'bg-red-100 text-red-800',
-  down: 'bg-blue-100 text-blue-800',
-  sideways: 'bg-zinc-200 text-zinc-700',
-  unknown: 'bg-zinc-200 text-zinc-700',
+  up: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
+  down: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  sideways: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  unknown: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
 };
 const VOL_TEXT: Record<string, string> = {
   calm: '변동성 낮음',
@@ -316,11 +369,11 @@ const VOL_TEXT: Record<string, string> = {
   unknown: '변동성 판단 불가',
 };
 const VOL_BADGE: Record<string, string> = {
-  calm: 'bg-zinc-200 text-zinc-700',
-  normal: 'bg-zinc-200 text-zinc-700',
-  elevated: 'bg-amber-100 text-amber-800',
-  extreme: 'bg-rose-100 text-rose-800',
-  unknown: 'bg-zinc-200 text-zinc-700',
+  calm: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  normal: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  elevated: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  extreme: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
+  unknown: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
 };
 const FLOW_TEXT: Record<string, string> = {
   foreign_buying: '외국인 순매수 지속',
@@ -329,22 +382,23 @@ const FLOW_TEXT: Record<string, string> = {
   unknown: '수급 판단 불가',
 };
 const FLOW_BADGE: Record<string, string> = {
-  foreign_buying: 'bg-red-100 text-red-800',
-  foreign_selling: 'bg-blue-100 text-blue-800',
-  mixed: 'bg-zinc-200 text-zinc-700',
-  unknown: 'bg-zinc-200 text-zinc-700',
+  foreign_buying: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
+  foreign_selling: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  mixed: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  unknown: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
 };
 
-// 신호 배지 — 국내 관례(빨강=매수 관점, 파랑=매도 관점).
+// 신호 배지. 워딩은 의도적으로 조건 서술형이다 — "매수/매도"는 권고로 읽혀서
+// 정직성 제약을 무너뜨린다 (codex 리뷰 반영). 색은 방향 관례(빨강=상방)만 따른다.
 const SIGNAL_TEXT: Record<string, string> = {
-  buy: '매수 관점',
-  sell: '매도 관점',
+  buy: '상방 조건 충족',
+  sell: '하방 조건 충족',
   watch: '관망',
 };
 const SIGNAL_BADGE: Record<string, string> = {
-  buy: 'bg-red-100 text-red-800',
-  sell: 'bg-blue-100 text-blue-800',
-  watch: 'bg-zinc-200 text-zinc-700',
+  buy: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
+  sell: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  watch: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
 };
 
 const PRED_TEXT: Record<string, string> = {
@@ -355,11 +409,11 @@ const PRED_TEXT: Record<string, string> = {
   unverifiable: '검증 불가',
 };
 const PRED_BADGE: Record<string, string> = {
-  pending: 'bg-zinc-200 text-zinc-700',
-  confirmed: 'bg-emerald-100 text-emerald-800',
-  refuted: 'bg-rose-100 text-rose-800',
-  expired: 'bg-zinc-200 text-zinc-500',
-  unverifiable: 'bg-amber-100 text-amber-800',
+  pending: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  confirmed: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
+  refuted: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
+  expired: 'bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500',
+  unverifiable: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
 };
 
 function kstTime(iso: string | null): string {
@@ -418,10 +472,45 @@ export default async function StockDashboardPage() {
     firstClose && lastClose ? ((lastClose - firstClose) / firstClose) * 100 : null;
 
   const now = Date.now();
-  const lastCaptured = items.reduce<string | null>(
+  const marketOpen = isMarketHoursKst(now);
+  const cards = CARD_METRICS.map((m) => items.find((i) => i.metric === m)).filter(
+    (i): i is ApiStockSnapshot => Boolean(i),
+  );
+  const lastCaptured = cards.reduce<string | null>(
     (max, i) => (max && max >= i.captured_at ? max : i.captured_at),
     null,
   );
+
+  // ── 히어로: 폰에서 첫 화면에 "지금 얼마, 몇 %"가 보여야 한다 (두 리뷰 공통 1순위).
+  //    장중 스냅샷이 오늘 것일 때만 장중 가격을 쓰고, 아니면 최근 마감 종가 + 전일比.
+  const todayKst = new Date(now + 9 * 3_600_000).toISOString().slice(0, 10);
+  const intradaySnap = items.find((i) => i.metric === 'intraday_price');
+  const intradayIsToday =
+    intradaySnap?.as_of_at != null &&
+    new Date(new Date(intradaySnap.as_of_at).getTime() + 9 * 3_600_000)
+      .toISOString()
+      .slice(0, 10) === todayKst;
+  let hero: { price: number; rate: number | null; label: string } | null = null;
+  if (intradayIsToday && intradaySnap) {
+    const p = intradaySnap.payload as Record<string, unknown>;
+    const price = Number(p.price);
+    const rate = Number(p.change_rate);
+    if (Number.isFinite(price)) {
+      hero = {
+        price,
+        rate: Number.isFinite(rate) ? rate : null,
+        label: `장중 · ${kstTime(intradaySnap.as_of_at)} 기준`,
+      };
+    }
+  } else if (closePoints.length >= 1) {
+    const last = closePoints[closePoints.length - 1]!;
+    const prev = closePoints[closePoints.length - 2];
+    hero = {
+      price: last.close,
+      rate: prev ? ((last.close - prev.close) / prev.close) * 100 : null,
+      label: `${last.date} 마감`,
+    };
+  }
 
   return (
     <div className="min-h-screen">
@@ -429,30 +518,55 @@ export default async function StockDashboardPage() {
       <main className="max-w-5xl mx-auto px-4 py-6 space-y-5">
         <div>
           <h1 className="text-xl font-semibold">Stock — 참고정보</h1>
-          <p className="text-xs text-zinc-500 mt-1">
-            reference state, not a signal · 예측 아님 ·{' '}
-            <Link href="/stock/decisions" className="underline hover:text-zinc-700">
-              매매 결정 로그
-            </Link>
-          </p>
+          <p className="text-xs text-zinc-500 mt-1">reference state, not a signal · 예측 아님</p>
         </div>
+
+        {hero && (
+          <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4">
+            <div className="flex items-baseline gap-3 flex-wrap">
+              {/* 히어로 숫자는 비례 숫자 그대로 — tabular-nums는 큰 숫자를 헐겁게 만든다 */}
+              <span className="text-3xl font-semibold">{won(hero.price)}</span>
+              {hero.rate !== null && (
+                <span
+                  className={`text-lg font-medium ${hero.rate >= 0 ? toneClass.pos : toneClass.neg}`}
+                >
+                  {hero.rate >= 0 ? '+' : ''}
+                  {hero.rate.toFixed(2)}%
+                </span>
+              )}
+              <span className="text-xs text-zinc-400">{hero.label} · 전일比</span>
+              <Link
+                href="/stock/decisions"
+                className="ml-auto shrink-0 text-sm px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-900"
+              >
+                결정 기록
+              </Link>
+            </div>
+            {regimeResult.regime && (
+              <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                {regimeResult.regime.label} · 기준 {regimeResult.indicators?.as_of}
+              </div>
+            )}
+          </section>
+        )}
 
         <div className="text-sm text-zinc-500">
           {lastCaptured ? (
             <>
               마지막 수집{' '}
               <span
-                className={`text-xs px-2 py-0.5 rounded ${freshnessBadge(minutesAgo(lastCaptured, now))}`}
+                className={`text-xs px-2 py-0.5 rounded ${freshnessBadge(minutesAgo(lastCaptured, now), marketOpen)}`}
               >
                 {agoText(minutesAgo(lastCaptured, now))}
               </span>{' '}
-              · {items.length}개 항목
-              {health.last_run && (
+              {!marketOpen && <span className="text-xs text-zinc-400"> · 장외</span>}
+              {/* 실행 상태는 문제가 있을 때만 노출 — 평상시 '백필 ok' 같은 운영 정보는 노이즈다 */}
+              {health.last_run && health.last_run.status !== 'ok' && (
                 <>
                   {' '}
                   · 최근 실행 {RUN_KIND_LABEL[health.last_run.kind] ?? health.last_run.kind}{' '}
                   <span
-                    className={`text-xs px-1.5 py-0.5 rounded ${RUN_STATUS_BADGE[health.last_run.status] ?? 'bg-zinc-200 text-zinc-700'}`}
+                    className={`text-xs px-1.5 py-0.5 rounded ${RUN_STATUS_BADGE[health.last_run.status] ?? 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'}`}
                   >
                     {health.last_run.status}
                   </span>
@@ -484,24 +598,23 @@ export default async function StockDashboardPage() {
           <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="font-medium">규칙 신호</h2>
-              <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
-                미검증
-              </span>
               <span
-                className={`text-sm px-2.5 py-0.5 rounded font-medium ${SIGNAL_BADGE[signalResult.signal.signal]}`}
+                className={`text-sm px-2.5 py-1 rounded font-medium ${SIGNAL_BADGE[signalResult.signal.signal]}`}
               >
                 {SIGNAL_TEXT[signalResult.signal.signal]}
               </span>
-              <span className="text-xs text-zinc-400 tabular-nums">
-                score {signalResult.signal.score >= 0 ? '+' : ''}{signalResult.signal.score}/{signalResult.signal.max_score}
-                {signalResult.signal.gated_by_volatility ? ' · 변동성 극단으로 관망 강등' : ''}
-              </span>
-              <span className="text-xs text-zinc-400 ml-auto tabular-nums">
-                directional 적중률{' '}
+              {/* 미검증 라벨은 신호명과 같은 시각 무게 — 떨어뜨리면 권고로 오독된다 */}
+              <span className="text-sm px-2.5 py-1 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 tabular-nums">
+                미검증 ·{' '}
                 {signalResult.directional.scored > 0
-                  ? `${Math.round((signalResult.directional.hit_rate ?? 0) * 100)}% (표본 ${signalResult.directional.scored})`
-                  : `표본 없음 (대기 ${signalResult.directional.pending})`}
+                  ? `적중 ${Math.round((signalResult.directional.hit_rate ?? 0) * 100)}% (표본 ${signalResult.directional.scored})`
+                  : '표본 없음'}
               </span>
+            </div>
+            <div className="text-xs text-zinc-500 dark:text-zinc-400 tabular-nums">
+              score {signalResult.signal.score >= 0 ? '+' : ''}{signalResult.signal.score}/{signalResult.signal.max_score}
+              {signalResult.signal.gated_by_volatility ? ' · 변동성 극단으로 관망 강등' : ''}
+              {signalResult.directional.pending > 0 ? ` · 채점 대기 ${signalResult.directional.pending}건` : ''}
             </div>
             <ul className="text-xs text-zinc-600 dark:text-zinc-400 space-y-0.5 tabular-nums">
               {signalResult.signal.components.map((c) => (
@@ -517,7 +630,9 @@ export default async function StockDashboardPage() {
                 </li>
               )}
             </ul>
-            <p className="text-[11px] text-zinc-400 pt-1">{signalResult.signal.disclaimer}</p>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 pt-1">
+              {signalResult.signal.disclaimer}
+            </p>
           </section>
         )}
 
@@ -555,10 +670,22 @@ export default async function StockDashboardPage() {
               </span>
             </div>
             <ul className="text-xs text-zinc-600 dark:text-zinc-400 space-y-0.5 tabular-nums">
-              {regimeResult.regime.reasons.map((r) => (
+              {regimeResult.regime.reasons.slice(0, 8).map((r) => (
                 <li key={r}>· {r}</li>
               ))}
             </ul>
+            {regimeResult.regime.reasons.length > 8 && (
+              <details>
+                <summary className="cursor-pointer select-none text-xs text-zinc-500 py-2">
+                  근거 더 보기 ({regimeResult.regime.reasons.length - 8})
+                </summary>
+                <ul className="text-xs text-zinc-600 dark:text-zinc-400 space-y-0.5 tabular-nums">
+                  {regimeResult.regime.reasons.slice(8).map((r) => (
+                    <li key={r}>· {r}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
             <p className="text-[11px] text-zinc-400 pt-1">
               {regimeResult.regime.disclaimer} 임계값은 `src/lib/stock-indicators.ts`에 있다.
             </p>
@@ -573,7 +700,7 @@ export default async function StockDashboardPage() {
             <BriefingCard a={analyses[0]!} now={now} prominent />
             {analyses.length > 1 && (
               <details className="text-sm">
-                <summary className="cursor-pointer text-zinc-500 select-none">
+                <summary className="cursor-pointer text-zinc-500 select-none py-2">
                   이전 브리핑 {analyses.length - 1}건
                 </summary>
                 <div className="mt-2 space-y-2">
@@ -586,13 +713,13 @@ export default async function StockDashboardPage() {
           </section>
         )}
 
-        {items.length === 0 ? (
+        {cards.length === 0 ? (
           <div className="text-center py-12 text-zinc-500">
             수집된 스냅샷이 없습니다. 수집기(GitHub Actions)가 POST하면 여기 표시돼요.
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {items.map((i) => {
+            {cards.map((i) => {
               const mins = minutesAgo(i.captured_at, now);
               return (
                 <section
@@ -604,7 +731,7 @@ export default async function StockDashboardPage() {
                       {METRIC_LABEL[i.metric] ?? i.metric}
                     </h2>
                     <span
-                      className={`shrink-0 text-xs px-2 py-0.5 rounded ${freshnessBadge(mins)}`}
+                      className={`shrink-0 text-xs px-2 py-0.5 rounded ${freshnessBadge(mins, marketOpen)}`}
                     >
                       {agoText(mins)}
                     </span>
@@ -659,14 +786,14 @@ export default async function StockDashboardPage() {
                           className={`text-xs tabular-nums ${periodChange >= 0 ? toneClass.pos : toneClass.neg}`}
                         >
                           {periodChange >= 0 ? '+' : ''}
-                          {periodChange.toFixed(2)}% · 기간
+                          {periodChange.toFixed(2)}% / {closePoints.length}거래일
                         </div>
                       )}
                     </div>
                   </div>
                   <CloseTrendChart points={closePoints} />
                   <details className="mt-2 text-sm">
-                    <summary className="cursor-pointer select-none text-xs text-zinc-500">
+                    <summary className="cursor-pointer select-none text-xs text-zinc-500 py-2">
                       표로 보기
                     </summary>
                     <div className="mt-2 overflow-x-auto">
@@ -710,7 +837,7 @@ export default async function StockDashboardPage() {
                   </h3>
                   <NetFlowChart points={flowPoints} />
                   <details className="mt-2 text-sm">
-                    <summary className="cursor-pointer select-none text-xs text-zinc-500">
+                    <summary className="cursor-pointer select-none text-xs text-zinc-500 py-2">
                       표로 보기
                     </summary>
                     <div className="mt-2 overflow-x-auto">
@@ -768,7 +895,7 @@ export default async function StockDashboardPage() {
               {predRows.map(toApiPrediction).map((pr) => (
                 <div key={pr.id} className="p-3 flex gap-3 items-baseline">
                   <span
-                    className={`shrink-0 text-[11px] px-1.5 py-0.5 rounded ${PRED_BADGE[pr.status] ?? 'bg-zinc-200 text-zinc-700'}`}
+                    className={`shrink-0 text-[11px] px-1.5 py-0.5 rounded ${PRED_BADGE[pr.status] ?? 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'}`}
                   >
                     {PRED_TEXT[pr.status] ?? pr.status}
                   </span>
@@ -824,7 +951,6 @@ export default async function StockDashboardPage() {
                     <div className="text-[11px] text-zinc-400 mt-0.5">
                       {kstTime(e.published_at)}
                       {e.publisher ? ` · ${e.publisher}` : ''}
-                      {e.source === 'dart' ? ' · 시각은 날짜만 제공(09:00 표기)' : ''}
                     </div>
                   </div>
                 </div>
@@ -832,6 +958,7 @@ export default async function StockDashboardPage() {
             </div>
             <p className="text-[11px] text-zinc-400">
               사건의 존재와 시각만 모아둔 것이다. 호재·악재 판정이나 인과 해석은 하지 않는다.
+              공시는 DART가 날짜만 제공해 09:00로 표기된다.
             </p>
           </section>
         )}

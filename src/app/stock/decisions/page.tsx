@@ -17,15 +17,15 @@ const ACTION_LABEL: Record<string, string> = {
   skip: '안 함',
 };
 const ACTION_BADGE: Record<string, string> = {
-  buy: 'bg-red-100 text-red-800',
-  sell: 'bg-blue-100 text-blue-800',
-  hold: 'bg-zinc-200 text-zinc-700',
-  watch: 'bg-zinc-200 text-zinc-700',
-  skip: 'bg-zinc-200 text-zinc-700',
+  buy: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
+  sell: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+  hold: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  watch: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
+  skip: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
 };
 
 const inputClass =
-  'w-full px-2 py-1.5 border border-zinc-300 dark:border-zinc-700 rounded bg-transparent text-sm';
+  'w-full px-2 py-2 border border-zinc-300 dark:border-zinc-700 rounded bg-transparent text-sm';
 
 function kstDateTime(iso: string): string {
   return new Date(iso).toLocaleString('ko-KR', {
@@ -64,7 +64,11 @@ export default async function DecisionsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <label className="flex flex-col text-xs">
               <span className="text-zinc-500 mb-1">한 일</span>
-              <select name="action" required defaultValue="buy" className={inputClass}>
+              {/* 기본 선택 없음 — '매수'가 기본값이면 기록 화면이 방향을 프레이밍한다 */}
+              <select name="action" required defaultValue="" className={inputClass}>
+                <option value="" disabled>
+                  선택…
+                </option>
                 {Object.entries(ACTION_LABEL).map(([v, label]) => (
                   <option key={v} value={v}>
                     {label}
@@ -93,7 +97,7 @@ export default async function DecisionsPage() {
           </label>
           <button
             type="submit"
-            className="px-3 py-1.5 rounded bg-zinc-900 text-white dark:bg-white dark:text-black text-sm"
+            className="px-3 py-2 rounded bg-zinc-900 text-white dark:bg-white dark:text-black text-sm"
           >
             기록
           </button>
@@ -117,7 +121,7 @@ export default async function DecisionsPage() {
               >
                 <div className="flex items-center gap-2 flex-wrap mb-2">
                   <span
-                    className={`text-xs px-2 py-0.5 rounded ${ACTION_BADGE[d.action] ?? 'bg-zinc-200 text-zinc-700'}`}
+                    className={`text-xs px-2 py-0.5 rounded ${ACTION_BADGE[d.action] ?? 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'}`}
                   >
                     {ACTION_LABEL[d.action] ?? d.action}
                   </span>
@@ -160,7 +164,7 @@ export default async function DecisionsPage() {
                   </div>
                 ) : (
                   <details className="mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-900">
-                    <summary className="cursor-pointer select-none text-xs text-zinc-500">
+                    <summary className="cursor-pointer select-none text-xs text-zinc-500 py-2">
                       결과·교훈 남기기
                     </summary>
                     <form
@@ -179,7 +183,7 @@ export default async function DecisionsPage() {
                       </label>
                       <button
                         type="submit"
-                        className="px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm"
+                        className="px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 text-sm"
                       >
                         저장하고 닫기
                       </button>
