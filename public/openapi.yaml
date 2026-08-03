@@ -23,7 +23,7 @@ info:
     /api/stock/*: 별도 기능 — SK하이닉스(000660) 매매 **참고정보** 애그리게이터.
     수집기가 저장한 수급·일봉·외국인보유 스냅샷을 읽고, 그 값에 근거한 브리핑을 남긴다.
     자동매매·수익예측이 아니다. 매수/매도/목표가/등급은 스키마에 없고, 검증되지 않은 방향성 주장은 API가 거부한다.
-  version: '1.7.0'
+  version: '1.8.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -486,7 +486,7 @@ components:
         title:     { type: string }
         url:       { type: [string, 'null'] }
         publisher: { type: [string, 'null'], description: '공시는 제출인, 뉴스는 언론사' }
-        category:  { type: [string, 'null'] }
+        category:  { type: [string, 'null'], description: "'macro'면 종목 무관 매크로 뉴스(엔캐리·환율 개입 등)" }
         collected_at: { type: string, format: date-time }
 
     MarketEventList:
@@ -531,6 +531,22 @@ components:
             institution_net_20d: { type: [number, 'null'] }
             individual_net_20d:  { type: [number, 'null'] }
             foreign_streak_days: { type: integer, description: '같은 방향 연속 거래일. 양수=순매수, 음수=순매도' }
+            fx:
+              type: array
+              description: |
+                환율 변화율 (매크로 지표 — 벤치마크 아님). **USD/JPY 하락 = 엔 강세**이며
+                엔캐리 청산 압력은 엔 강세 쪽에서 커진다. reading 필드의 해석 문구를 그대로 쓸 것.
+              items:
+                type: object
+                properties:
+                  key:   { type: string }
+                  label: { type: string }
+                  close: { type: number }
+                  as_of: { type: string }
+                  chg_1d_pct:  { type: [number, 'null'] }
+                  chg_5d_pct:  { type: [number, 'null'] }
+                  chg_20d_pct: { type: [number, 'null'] }
+                  reading: { type: [string, 'null'] }
         regime:
           type: [object, 'null']
           properties:

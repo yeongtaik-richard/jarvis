@@ -48,6 +48,28 @@ export interface RelativeStrength {
   overlap_days: number;
 }
 
+/** 환율 시계열 입력. */
+export interface FxSeries {
+  key: string; // 'usdjpy' | 'usdkrw'
+  label: string;
+  /** 이 환율이 오를 때 통화가 어느 쪽으로 가는지 화면 문구 ("원 약세" 등) */
+  up_means: string;
+  down_means: string;
+  bars: { date: string; close: number }[];
+}
+
+export interface FxChange {
+  key: string;
+  label: string;
+  close: number;
+  as_of: string;
+  chg_1d_pct: number | null;
+  chg_5d_pct: number | null;
+  chg_20d_pct: number | null;
+  /** 5일 변화 방향의 해석 문구. 오독 방지용 — USD/JPY 하락 = 엔 강세. */
+  reading: string | null;
+}
+
 export interface Flow {
   date: string;
   foreign: number; // 순매수 대금 (백만원)
@@ -91,6 +113,8 @@ export interface Indicators {
   foreign_streak_days: number; // 같은 방향 연속 (양수=순매수, 음수=순매도)
   /** 벤치마크 대비 초과수익. 벤치마크가 없으면 빈 배열. */
   relative: RelativeStrength[];
+  /** 환율 변화율 (매크로 지표 — 초과수익 비교 대상이 아니다). */
+  fx: FxChange[];
 }
 
 const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
@@ -183,6 +207,7 @@ export function computeIndicators(
   bars: Bar[],
   flows: Flow[] = [],
   benchmarks: BenchmarkSeries[] = [],
+  fxSeries: FxSeries[] = [],
 ): Indicators | null {
   if (!bars.length) return null;
   const closes = bars.map((b) => b.close);
@@ -265,6 +290,28 @@ export function computeIndicators(
     institution_net_20d: sum((x) => x.institution),
     individual_net_20d: sum((x) => x.individual),
     foreign_streak_days: streak,
+    fx: fxSeries
+      .filter((f) => f.bars.length > 0)
+      .map((f) => {
+        const series = [...f.bars].sort((x, y) => x.date.localeCompare(y.date));
+        const last = series[series.length - 1]!;
+        const chg = (days: number): number | null => {
+          if (series.length < days + 1) return null;
+          const from = series[series.length - 1 - days]!;
+          return from.close ? round((last.close / from.close - 1) * 100, 2) : null;
+        };
+        const c5 = chg(5);
+        return {
+          key: f.key,
+          label: f.label,
+          close: last.close,
+          as_of: last.date,
+          chg_1d_pct: chg(1),
+          chg_5d_pct: c5,
+          chg_20d_pct: chg(20),
+          reading: c5 === null ? null : c5 > 0 ? f.up_means : c5 < 0 ? f.down_means : '보합',
+        };
+      }),
     relative: benchmarks.map((b) => {
       const series = [...b.bars].sort((x, y) => x.date.localeCompare(y.date));
       const stock = bars.map((x) => ({ date: x.date, close: x.close }));
@@ -422,6 +469,13 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
     } else {
       reasons.push(base);
     }
+  }
+
+  for (const f of ind.fx) {
+    if (f.chg_5d_pct === null) continue;
+    reasons.push(
+      `${f.label} ${f.close.toLocaleString('ko-KR')} (${f.as_of}), 5일 ${f.chg_5d_pct > 0 ? '+' : ''}${f.chg_5d_pct}%${f.reading ? ` — ${f.reading}` : ''}`,
+    );
   }
 
   const parts = [TREND_LABEL[trend]];

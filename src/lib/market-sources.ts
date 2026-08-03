@@ -81,6 +81,7 @@ export async function fetchNewsHeadlines(
   query: string,
   withinHours = 48,
   cap = 40,
+  category: string | null = null,
 ): Promise<MarketEvent[]> {
   const url = new URL('https://news.google.com/rss/search');
   url.searchParams.set('q', query);
@@ -125,8 +126,8 @@ export async function fetchNewsHeadlines(
       title,
       url: link,
       publisher,
-      category: null,
-      raw: { pubDate, rawTitle },
+      category,
+      raw: { pubDate, rawTitle, query },
     });
   }
   // 최신순으로 잘라낸다 (피드가 관련도 순으로 섞여 오기 때문).

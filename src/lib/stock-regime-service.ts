@@ -5,9 +5,20 @@ import {
   type Bar,
   type BenchmarkSeries,
   type Flow,
+  type FxSeries,
   type Indicators,
   type Regime,
 } from './stock-indicators';
+
+/**
+ * 환율은 벤치마크가 아니라 매크로 지표다 — 초과수익 비교 대상이 아니므로 BENCHMARKS와
+ * 분리한다. up_means/down_means는 오독 방지용: USD/JPY **하락**이 엔 **강세**다
+ * (엔캐리 청산 압력은 엔 강세 쪽에서 커진다).
+ */
+const FX: { metric: string; key: string; label: string; up: string; down: string }[] = [
+  { metric: 'fx_usdjpy', key: 'usdjpy', label: 'USD/JPY', up: '엔 약세', down: '엔 강세' },
+  { metric: 'fx_usdkrw', key: 'usdkrw', label: 'USD/KRW', up: '원 약세', down: '원 강세' },
+];
 
 /**
  * 수집기의 `benchmark_*` metric ↔ 화면 라벨.
@@ -48,11 +59,14 @@ const num = (payload: unknown, key: string): number => {
  * 전부 낡은 값이 된다. 269일 계산은 밀리초 단위라 캐싱할 이유도 없다.
  */
 export async function getStockRegime(symbol: string, days = 300): Promise<RegimeResult> {
-  const [ohlcv, flowRows, ...benchRows] = await Promise.all([
+  const [ohlcv, flowRows, ...rest] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', days),
     getStockHistory(symbol, 'investor_flow', days),
     ...BENCHMARKS.map((b) => getStockHistory(symbol, b.metric, days)),
+    ...FX.map((f) => getStockHistory(symbol, f.metric, days)),
   ]);
+  const benchRows = rest.slice(0, BENCHMARKS.length);
+  const fxRows = rest.slice(BENCHMARKS.length);
 
   const bars: Bar[] = ohlcv
     .map((r) => ({
@@ -83,6 +97,16 @@ export async function getStockRegime(symbol: string, days = 300): Promise<Regime
       .filter((x) => Number.isFinite(x.close)),
   })).filter((b) => b.bars.length > 0);
 
-  const indicators = computeIndicators(bars, flows, benchmarks);
+  const fxSeries: FxSeries[] = FX.map((f, i) => ({
+    key: f.key,
+    label: f.label,
+    up_means: f.up,
+    down_means: f.down,
+    bars: (fxRows[i] ?? [])
+      .map((r) => ({ date: r.bucketKey, close: num(r.payload, 'close') }))
+      .filter((x) => Number.isFinite(x.close) && x.close > 0),
+  }));
+
+  const indicators = computeIndicators(bars, flows, benchmarks, fxSeries);
   return { symbol, indicators, regime: classifyRegime(indicators) };
 }

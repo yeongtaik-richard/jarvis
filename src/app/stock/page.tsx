@@ -806,7 +806,7 @@ export default async function StockDashboardPage() {
                         : 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
                     }`}
                   >
-                    {e.source === 'dart' ? '공시' : '뉴스'}
+                    {e.source === 'dart' ? '공시' : e.category === 'macro' ? '매크로' : '뉴스'}
                   </span>
                   <div className="min-w-0 flex-1">
                     {e.url ? (

@@ -80,6 +80,7 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
 | `daily_ohlcv` | `open, high, low, close, volume` |
 | `foreign_holding` | `price, foreign_ratio(%), foreign_qty` |
 | `benchmark_{sox,nasdaq,kospi,electronics,samsung}` | `close, open, high, low, volume` (+`index_code`/`peer_code`) — 상대강도용 벤치마크 |
+| `fx_{usdjpy,usdkrw}` | `fx_code, close, open, high, low` — 환율 (FHKST03030100 div `X`, FX@JPY/FX@KRW). **벤치마크 아님**, 매크로 지표 |
 | `adr_price` | `ticker, exchange, currency: 'USD', close, open, high, low, volume` — SKHY(NAS). 벤치마크 아님 |
 | `intraday_price` | 가격·거래: `price, change, change_rate, open, high, low, volume, amount_krw, amount_unit: 'krw'` · 수급의 질: `foreign_ratio, foreign_qty, foreign_net_qty, program_net_qty, short_qty, loan_balance_rate` · 플래그: `vi_code, warn_code, short_over_yn, caution_yn` |
 | `valuation` | `per, pbr, eps, bps, market_cap(+`market_cap_unit: 'hundred_million_krw'`), listed_shares, turnover_rate, sector, w52_high/low(+date), d250_high/low` |
@@ -301,6 +302,13 @@ Claude 클라우드 루틴 (평일 09:30~15:30 매시) · Claude 세션 (온디�
   가중치를 모른다. 회귀로 역산하지 않는다(다른 구성종목과의 공분산이 섞임).
 - **크로스마켓 정렬은 as-of**: 미국 지수는 KRX와 달력이 달라(시차·휴장) 정확 일치 매칭이
   항상 실패한다. "그 날짜 이하 최근 세션"으로 맞추고, 5일 넘게 벌어지면 null.
+- **환율(fx_*)도 벤치마크가 아니다** — 주식과 환율의 '초과수익' 비교는 무의미해서
+  `relative`가 아닌 `indicators.fx`로 나간다. **USD/JPY 하락 = 엔 강세**고 엔캐리 청산
+  압력은 그쪽에서 커진다(2026-08-03 미·일 공조 개입 국면에서 추가). 오독 방지용
+  `reading` 문구("엔 강세" 등)가 함께 나가니 소비 측은 그걸 그대로 쓸 것.
+- 매크로 뉴스는 `MACRO_NEWS_QUERY`(기본 '엔캐리 OR 엔화 개입 OR 원달러 환율')로 따로
+  긁어 `category='macro'`로 저장한다. 종목명이 없는 거시 사건이 기존 쿼리에 안 잡히던
+  구멍을 메운 것.
 - **ADR(SKHY)은 벤치마크가 아니다** — 같은 회사라 초과수익이 정의상 무의미하다.
   오버나이트 괴리 관찰용이며, 이력 15거래일·BYMD 페이징 불가라는 한계가 있다.
   KRX 대비 프리미엄 계산은 ADR 비율·환율이 없어 하지 않는다.

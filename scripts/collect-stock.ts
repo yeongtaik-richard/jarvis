@@ -23,6 +23,7 @@ import {
   currentQuote,
   dailyCandles,
   dailyCandlesRange,
+  FX_CODES,
   INDEX_CODES,
   indexDaily,
   indexDailyRange,
@@ -45,6 +46,10 @@ const CORP_CODE = process.env.DART_CORP_CODE ?? '00164779';
 const NEWS_QUERY = process.env.NEWS_QUERY ?? 'SK하이닉스';
 // 피어 종목(삼성전자)과 ADR. 종목이 안 들어간 벤치마크라 상대강도를 액면대로 읽을 수 있다.
 const PEER_CODE = process.env.PEER_CODE ?? '005930';
+// 매크로 뉴스 쿼리. 종목 쿼리와 달리 category='macro'로 저장돼 소비 측에서 구분된다.
+// 엔캐리·환율 개입 같은 사건은 종목명을 언급하지 않아 기존 쿼리로는 안 잡혔다.
+const MACRO_NEWS_QUERY =
+  process.env.MACRO_NEWS_QUERY ?? '엔캐리 OR 엔화 개입 OR 원달러 환율';
 const ADR = { excd: process.env.ADR_EXCD ?? 'NAS', symb: process.env.ADR_SYMB ?? 'SKHY' };
 
 function ymd(kisDate: string): string {
@@ -167,6 +172,14 @@ async function collectEvents(
     console.log(`[collect] news ${rows.length}건 (48시간 이내)`);
   } catch (e) {
     errors.push(`news: ${String(e)}`);
+  }
+
+  try {
+    const rows = await fetchNewsHeadlines(MACRO_NEWS_QUERY, 48, 20, 'macro');
+    events.push(...rows.map((e) => ({ ...e, symbol: SYMBOL, collector_run_id: runId })));
+    console.log(`[collect] macro news ${rows.length}건`);
+  } catch (e) {
+    errors.push(`macro news: ${String(e)}`);
   }
 
   if (!events.length) return 0;
@@ -517,6 +530,40 @@ async function main(): Promise<void> {
     }
   } catch (e) {
     errors.push(`benchmark_samsung: ${String(e)}`);
+  }
+
+  // 2d-2) 환율. 벤치마크(초과수익 비교 대상)가 아니라 **매크로 지표**다 — 엔캐리 청산
+  //       리스크는 USD/JPY가, 외국인 수급 환경은 USD/KRW가 선행한다. metric 접두사도
+  //       benchmark_가 아닌 fx_로 구분한다.
+  for (const [key, code] of Object.entries(FX_CODES)) {
+    try {
+      const start = kstDay(Math.max(backfill, 25)).compact;
+      const rows = backfill
+        ? await overseasIndexDailyRange(kisToken, creds, code, start, today.compact, {
+            maxCalls: Math.min(20, Math.ceil(backfill / 100) + 2),
+            marketDiv: 'X',
+          })
+        : await overseasIndexDaily(kisToken, creds, code, start, today.compact, 'X');
+      // FX는 KRW 쌍이 오늘 날짜를 장중 값으로 주기도 한다 — 확정 전 값 규칙 동일 적용.
+      const usable = rows.filter((r) => ymd(r.date) < today.dashed);
+      const picked = (backfill ? usable.slice() : usable.slice(0, 1)).reverse();
+      for (const r of picked) {
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: `fx_${key}`,
+          bucket_key: ymd(r.date),
+          trading_date_kst: ymd(r.date),
+          collector_run_id: runId,
+          payload: { fx_code: code, close: r.close, open: r.open, high: r.high, low: r.low },
+        });
+      }
+      if (picked.length) {
+        console.log(`[collect] fx_${key} ${picked.length} day(s): ${ymd(picked[0]!.date)}..${ymd(picked.at(-1)!.date)}`);
+      }
+    } catch (e) {
+      errors.push(`fx_${key}: ${String(e)}`);
+    }
   }
 
   // 2e) ADR. 벤치마크가 아니라 **같은 회사의 다른 세션**이다 — 초과수익 비교 대상이 아니고,

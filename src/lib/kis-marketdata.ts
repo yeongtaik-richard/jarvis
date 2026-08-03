@@ -234,11 +234,17 @@ export async function indexDailyRange(
   return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
 }
 
+/** 환율 코드 (FHKST03030100, div `X`). 확인: FX@KRW=원/달러(KMB), FX@JPY=엔/달러. */
+export const FX_CODES = {
+  usdkrw: 'FX@KRW',
+  usdjpy: 'FX@JPY',
+} as const;
+
 /**
- * 해외지수 일별 (FHKST03030100, `FID_COND_MRKT_DIV_CODE='N'`).
+ * 해외지수/환율 일별 (FHKST03030100). `marketDiv` — `'N'` 해외지수, `'X'` 환율.
  * 국내 지수와 **필드명이 또 다르다** (`ovrs_nmix_*`). 확인된 코드: `SOX`(필라델피아
- * 반도체지수), `COMP`(나스닥 종합). `.SOX`/`SOXX`는 빈 응답이라 쓰지 말 것.
- * 한 번에 100건 상한. 반환은 최신순.
+ * 반도체지수), `COMP`(나스닥 종합), 환율은 FX_CODES. `.SOX`/`SOXX`/`USDKRW` 같은
+ * 변형은 빈 응답이라 쓰지 말 것. 한 번에 100건 상한. 반환은 최신순.
  */
 export async function overseasIndexDaily(
   token: string,
@@ -246,6 +252,7 @@ export async function overseasIndexDaily(
   code: string,
   start: string,
   end: string,
+  marketDiv: 'N' | 'X' = 'N',
 ): Promise<IndexBar[]> {
   const body = await kisGet<{ output2?: Record<string, string>[] }>(
     token,
@@ -253,7 +260,7 @@ export async function overseasIndexDaily(
     '/uapi/overseas-price/v1/quotations/inquire-daily-chartprice',
     'FHKST03030100',
     {
-      FID_COND_MRKT_DIV_CODE: 'N',
+      FID_COND_MRKT_DIV_CODE: marketDiv,
       FID_INPUT_ISCD: code,
       FID_INPUT_DATE_1: start,
       FID_INPUT_DATE_2: end,
@@ -279,14 +286,14 @@ export async function overseasIndexDailyRange(
   code: string,
   start: string,
   end: string,
-  opts: { maxCalls?: number; delayMs?: number } = {},
+  opts: { maxCalls?: number; delayMs?: number; marketDiv?: 'N' | 'X' } = {},
 ): Promise<IndexBar[]> {
   const maxCalls = opts.maxCalls ?? 12;
   const delayMs = opts.delayMs ?? 250;
   const byDate = new Map<string, IndexBar>();
   let cursor = end;
   for (let i = 0; i < maxCalls; i++) {
-    const page = await overseasIndexDaily(token, creds, code, start, cursor);
+    const page = await overseasIndexDaily(token, creds, code, start, cursor, opts.marketDiv ?? 'N');
     if (!page.length) break;
     const before = byDate.size;
     for (const b of page) byDate.set(b.date, b);
