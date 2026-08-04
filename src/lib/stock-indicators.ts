@@ -366,7 +366,7 @@ export interface Regime {
   label: string;
   /** 각 판정의 근거가 된 실제 숫자. 라벨만 믿지 말고 이걸 보게 하려고 같이 준다. */
   reasons: string[];
-  /** 이 라벨은 예측이 아니라는 사실을 소비하는 쪽에 강제로 노출시킨다. */
+  /** 국면 라벨 자체는 서술이라는 점을 소비하는 쪽에 강제로 노출시킨다 (방향 예측은 규칙 신호 담당). */
   disclaimer: string;
 }
 
@@ -497,7 +497,7 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
     label: parts.join(' · '),
     reasons,
     disclaimer:
-      '과거 데이터의 서술이다. 앞으로의 방향을 뜻하지 않으며 매매 판단이 아니다.',
+      '국면 라벨은 과거 데이터의 서술이다 — 그 자체로 앞날을 뜻하진 않는다. 방향 예측은 규칙 신호가 따로 내고, 기록·채점된다.',
   };
 }
 

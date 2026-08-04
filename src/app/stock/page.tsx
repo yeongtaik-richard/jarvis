@@ -5,6 +5,7 @@ import { searchMarketEvents, toApiMarketEvent } from '@/lib/market-event-service
 import { getStockRegime } from '@/lib/stock-regime-service';
 import { predictionStats, searchPredictions, toApiPrediction } from '@/lib/prediction-service';
 import { getStockSignal } from '@/lib/stock-signal-service';
+import { getPredictionLedger } from '@/lib/prediction-ledger';
 import type { SignalSeriesPoint } from '@/lib/stock-signal';
 import { PredictionQuery } from '@/lib/schemas';
 import { MarketEventQuery, StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
@@ -20,6 +21,7 @@ import {
   type ApiStockSnapshot,
 } from '@/lib/stock-service';
 import { korQty, moneyKrw, moneyMil, won } from './format';
+import { PredictionLedgerCard } from './Ledger';
 import {
   CloseTrendChart,
   NetFlowChart,
@@ -328,7 +330,7 @@ function BriefingCard({
         <div className="text-sm whitespace-pre-wrap leading-relaxed">{a.body}</div>
       )}
       <div className="mt-2 text-[11px] text-zinc-400">
-        {a.authored_by} · {a.symbol} · 예측 아님(참고용)
+        {a.authored_by} · {a.symbol} · 서술 텍스트(방향은 규칙 신호 레인에서만)
       </div>
     </div>
   );
@@ -533,6 +535,8 @@ export default async function StockDashboardPage() {
     predictionStats(symbol),
     getStockSignal(symbol),
   ]);
+  // 장부는 조회가 곧 채점이라 신호 계산과 순서를 두지 않는다 (둘 다 scorePending 호출).
+  const ledger = await getPredictionLedger(symbol);
   const events = eventRows.map(toApiMarketEvent);
   const closePoints: ClosePoint[] = ohlcvRows
     .map((r) => ({ date: r.bucketKey, close: payloadNum(r.payload, 'close') }))
@@ -604,7 +608,11 @@ export default async function StockDashboardPage() {
       <main className="max-w-5xl mx-auto px-4 py-6 space-y-5">
         <div>
           <h1 className="text-xl font-semibold">Stock — 참고정보</h1>
-          <p className="text-xs text-zinc-500 mt-1">reference state, not a signal · 예측 아님</p>
+          {/* "예측 아님"은 이제 거짓이다 — 규칙이 방향을 예측하고 자동 채점된다.
+              여전히 사실인 것만 남긴다: 주문은 못 하고, 목표가·수익률·등급은 없다. */}
+          <p className="text-xs text-zinc-500 mt-1">
+            규칙 방향 예측 + 자동 채점 · 주문 기능 없음 · 목표가·수익률 없음
+          </p>
         </div>
 
         {hero && (
@@ -913,6 +921,8 @@ export default async function StockDashboardPage() {
             </p>
           </section>
         )}
+
+        <PredictionLedgerCard ledger={ledger} />
 
         {regimeResult.regime && regimeResult.indicators && (
           <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 space-y-2">

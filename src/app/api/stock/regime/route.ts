@@ -9,7 +9,8 @@ export const dynamic = 'force-dynamic';
 
 /**
  * 저장된 일봉·수급으로 계산한 지표와 규칙 기반 국면 라벨. 저장하지 않고 매번 계산한다.
- * **예측이 아니다** — 응답의 `regime.disclaimer`가 그 사실을 같이 실어 보낸다.
+ * 국면 라벨 자체는 과거 데이터의 서술이다 — 응답의 `regime.disclaimer`가 그 사실을 같이
+ * 실어 보낸다. **방향 예측은 `/api/stock/signal`이 따로 내고, 기록되고 채점된다.**
  */
 export const GET = withLog(async (req: NextRequest) => {
   const authError = checkBearer(req, { also: 'briefing' });

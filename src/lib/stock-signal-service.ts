@@ -329,6 +329,10 @@ export async function recordStockSignal(symbol: string): Promise<RecordResult> {
         kind: h.kind,
         claim: `규칙 ${dir} (${h.label} 지평, ${sig.passed ? '신호 발효' : '게이트 차단 — 검증용'}): ${bucket} 종가가 기준(${asOf} 종가 ${refClose.toLocaleString('ko-KR')}원)보다 ${dir === 'buy' ? '높은지' : '낮은지'} — score ${sig.score}/${sig.max_score}, 변동성 ${sig.volatility}`,
         context: {
+          // 기준 봉의 거래일. created_at에서 유추하면 안 된다 — 마감 전에 기록되면
+          // 기록일과 기준 봉이 하루 어긋나고, 장부가 "8/4 마감에 → 8/4 판가름" 같은
+          // 말이 안 되는 문장을 만든다 (2026-08-04 실제 발생).
+          as_of: asOf,
           score: sig.score,
           passed: sig.passed,
           gated: sig.gated_by_volatility,
