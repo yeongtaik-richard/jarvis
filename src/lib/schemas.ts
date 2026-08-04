@@ -244,6 +244,12 @@ export const CreatePredictionInput = z.object({
   threshold: z.number().finite(),
   // 채점 대상 bucket_key. 일별 YYYY-MM-DD 또는 인트라데이 ISO.
   target_bucket: z.string().min(10).max(60),
+  /**
+   * 판정 시점의 규칙 상태를 박제한다 (규칙 신호 레인에서만 채운다):
+   * { score, passed, gated, applied_threshold, volatility, components }.
+   * passed=false는 게이트에 막힌 날 — 매매 참고가 아니라 게이트 검증용 표본이다.
+   */
+  context: z.record(z.string(), z.unknown()).nullish(),
 });
 export type CreatePredictionInput = z.infer<typeof CreatePredictionInput>;
 

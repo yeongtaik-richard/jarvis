@@ -30,7 +30,20 @@ export interface SignalComponent {
 }
 
 export interface RuleSignal {
+  /** 게이트·임계값을 **통과한** 최종 신호. 매매 참고는 이것만 본다. */
   signal: SignalValue;
+  /**
+   * 점수 부호가 가리키는 원시 방향 (임계값·게이트 무시). |score|가 1이어도 방향은 있다.
+   * 이걸 노출하는 이유는 하나뿐이다 — 게이트가 막은 날도 기록해서 **게이트 자체를
+   * 실전 데이터로 검증**하기 위해서다. 매매 판단에 쓰라고 있는 값이 아니다.
+   */
+  raw_direction: Exclude<SignalValue, 'watch'> | null;
+  /** 최종 신호가 임계값·게이트를 통과했는가 (= signal !== 'watch') */
+  passed: boolean;
+  /** 이 판정에 적용된 임계값 (변동성 극단이면 3, 아니면 2) */
+  applied_threshold: number;
+  /** 판정 시점의 변동성 국면 — 게이트 검증 때 슬라이스 기준이 된다 */
+  volatility: string;
   /** 컴포넌트 합. [-3, +3] */
   score: number;
   max_score: number;
@@ -104,6 +117,10 @@ export function computeSignal(
 
   return {
     signal,
+    raw_direction: score > 0 ? 'buy' : score < 0 ? 'sell' : null,
+    passed: signal !== 'watch',
+    applied_threshold: threshold,
+    volatility: regime.volatility,
     score,
     max_score: components.length,
     components,
@@ -139,6 +156,12 @@ export interface SignalSeriesPoint {
   score: number;
   signal: SignalValue;
   gated: boolean;
+  /** 원시 방향 — 게이트에 막힌 날도 방향은 있다 (게이트 검증용) */
+  raw_direction: 'buy' | 'sell' | null;
+  /** 판정 시점 국면. "어떤 장에서 무엇이 먹히나"를 되묻는 슬라이스 축이다. */
+  regime: { trend: string; volatility: string; flow: string };
+  /** 컴포넌트별 값 — 국면별로 어느 컴포넌트가 기여했는지 분해할 때 쓴다 */
+  components: Record<string, number>;
 }
 
 export interface SignalBacktest {
@@ -222,10 +245,118 @@ export function computeSignalSeries(
     const ind = computeIndicators(upto, flowsUpto, benchUpto);
     const regime = classifyRegime(ind);
     const sig = computeSignal(ind, regime);
-    if (sig) {
-      series.push({ date, score: sig.score, signal: sig.signal, gated: sig.gated_by_volatility });
+    if (sig && regime) {
+      series.push({
+        date,
+        score: sig.score,
+        signal: sig.signal,
+        gated: sig.gated_by_volatility,
+        raw_direction: sig.raw_direction,
+        regime: { trend: regime.trend, volatility: regime.volatility, flow: regime.flow },
+        components: Object.fromEntries(sig.components.map((c) => [c.key, c.value])),
+      });
     }
   }
 
   return { series, backtest: computeSignalBacktest(series, bars, horizon) };
+}
+
+// ── 국면별 성능 분해 ────────────────────────────────────────────────────
+
+export interface RegimeSlice {
+  /** 슬라이스 축과 값. 예: { axis: 'volatility', value: 'extreme' } */
+  axis: string;
+  value: string;
+  n: number;
+  hits: number;
+  hit_rate: number | null;
+  baseline_up_rate: number | null;
+  /** 기저율 대비 초과 (%p) — 이 국면에서 규칙이 실제로 보탠 몫 */
+  edge_pp: number | null;
+}
+
+export interface ComponentSlice {
+  component: string;
+  /** 이 컴포넌트가 켜진(±1) 날만 모아 그 방향의 적중률 */
+  n: number;
+  hits: number;
+  hit_rate: number | null;
+  baseline_up_rate: number | null;
+  edge_pp: number | null;
+}
+
+const pct = (a: number, b: number): number | null => (b > 0 ? Number((a / b).toFixed(3)) : null);
+const ppDiff = (a: number | null, b: number | null): number | null =>
+  a === null || b === null ? null : Number(((a - b) * 100).toFixed(1));
+
+/**
+ * "어떤 장에서 어떤 규칙이 먹히나"를 되묻는 분해.
+ *
+ * 국면별(추세/변동성/수급)로 원시 방향의 적중률과 **그 국면의 기저율**을 나란히 낸다.
+ * 국면마다 기저율이 다르다는 게 핵심이다 — 상승 추세 구간에서는 아무 날이나 사도
+ * 잘 맞으므로, 국면별 기저율을 빼지 않으면 "상승장에서 규칙이 잘 맞는다"는 동어반복만
+ * 나온다.
+ *
+ * 여기 나오는 수치는 **게이트를 무시한 원시 방향** 기준이다. 게이트에 막힌 날도
+ * 포함해야 게이트가 옳았는지 판정할 수 있기 때문이다.
+ */
+export function computeRegimeBreakdown(
+  series: SignalSeriesPoint[],
+  bars: Bar[],
+  horizon: number,
+): { regimes: RegimeSlice[]; components: ComponentSlice[] } {
+  const closes = bars.map((b) => b.close);
+  const idx = new Map(bars.map((b, i) => [b.date, i]));
+
+  type Acc = { n: number; hits: number; baseN: number; baseUp: number };
+  const mk = (): Acc => ({ n: 0, hits: 0, baseN: 0, baseUp: 0 });
+  const regimeAcc = new Map<string, Acc>();
+  const compAcc = new Map<string, Acc>();
+
+  for (const pt of series) {
+    const i = idx.get(pt.date);
+    if (i === undefined || i + horizon >= closes.length) continue;
+    const up = closes[i + horizon]! > closes[i]!;
+
+    for (const [axis, value] of Object.entries(pt.regime)) {
+      const key = `${axis}|${value}`;
+      const a = regimeAcc.get(key) ?? mk();
+      a.baseN++;
+      if (up) a.baseUp++;
+      if (pt.raw_direction) {
+        a.n++;
+        if (pt.raw_direction === 'buy' ? up : !up) a.hits++;
+      }
+      regimeAcc.set(key, a);
+    }
+
+    for (const [comp, v] of Object.entries(pt.components)) {
+      if (v === 0) continue; // 꺼진 컴포넌트는 이 슬라이스에 기여하지 않는다
+      const a = compAcc.get(comp) ?? mk();
+      a.baseN++;
+      if (up) a.baseUp++;
+      a.n++;
+      if (v > 0 ? up : !up) a.hits++;
+      compAcc.set(comp, a);
+    }
+  }
+
+  const regimes: RegimeSlice[] = [...regimeAcc.entries()]
+    .map(([key, a]) => {
+      const [axis, value] = key.split('|') as [string, string];
+      const hit = pct(a.hits, a.n);
+      const base = pct(a.baseUp, a.baseN);
+      return { axis, value, n: a.n, hits: a.hits, hit_rate: hit, baseline_up_rate: base, edge_pp: ppDiff(hit, base) };
+    })
+    .sort((x, y) => x.axis.localeCompare(y.axis) || y.n - x.n);
+
+  const components: ComponentSlice[] = [...compAcc.entries()]
+    .map(([component, a]) => {
+      const hit = pct(a.hits, a.n);
+      const base = pct(a.baseUp, a.baseN);
+      return { component, n: a.n, hits: a.hits, hit_rate: hit, baseline_up_rate: base, edge_pp: ppDiff(hit, base) };
+    })
+    .sort((x, y) => (y.edge_pp ?? -99) - (x.edge_pp ?? -99));
+
+  return { regimes, components };
 }

@@ -21,6 +21,8 @@ export type ApiPrediction = {
   actual_value: number | null;
   scored_at: string | null;
   score_note: string | null;
+  /** 규칙 신호 레인의 판정 상태 박제 — passed=false면 게이트 검증용 표본이다 */
+  context: unknown;
 };
 
 export function toApiPrediction(p: StockPrediction): ApiPrediction {
@@ -41,6 +43,7 @@ export function toApiPrediction(p: StockPrediction): ApiPrediction {
     actual_value: p.actualValue,
     scored_at: p.scoredAt ? p.scoredAt.toISOString() : null,
     score_note: p.scoreNote,
+    context: p.context ?? null,
   };
 }
 
@@ -88,6 +91,7 @@ export async function createPrediction(
       comparator: input.comparator,
       threshold: input.threshold,
       targetBucket: input.target_bucket,
+      context: input.context ?? null,
     })
     .returning();
   return row;

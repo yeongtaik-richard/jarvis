@@ -4,10 +4,13 @@ import { stockPredictions } from '@/db/schema';
 import { createPrediction, toApiPrediction, type ApiPrediction } from './prediction-service';
 import { HttpError } from './errors';
 import {
+  computeRegimeBreakdown,
   computeSignal,
   computeSignalBacktest,
   computeSignalSeries,
   HORIZONS,
+  type ComponentSlice,
+  type RegimeSlice,
   type HorizonKey,
   type RuleSignal,
   type SignalBacktest,
@@ -42,8 +45,13 @@ export type HorizonView = {
   stale: boolean;
   /** 과거 재적용 성적 — 기저율과 함께만 인용할 것 */
   backtest: SignalBacktest;
-  /** 실제로 기록되고 채점된 성적 */
+  /** 통과한 신호의 실전 성적 — 이게 "규칙의 성적표"다 */
   live: DirectionalStats;
+  /**
+   * 게이트·임계값에 막힌 날의 실전 성적. 매매 참고가 아니라 게이트 검증용이다 —
+   * 이 표본이 통과분보다 잘 맞으면 게이트가 틀렸다는 증거가 된다.
+   */
+  blocked: DirectionalStats;
 };
 
 export type DirectionalStats = {
@@ -71,6 +79,11 @@ export type SignalResult = {
   weekly: WeeklyChange[];
   /** 규칙 점수를 과거에 재적용한 시계열 (최근 90거래일) */
   score_series: SignalSeriesPoint[];
+  /**
+   * "어떤 장에서 어떤 규칙이 먹히나" — 국면별·컴포넌트별 분해 (5거래일 지평, 인샘플).
+   * 게이트를 무시한 원시 방향 기준이다. 규칙 개선의 출발점이지 성적표가 아니다.
+   */
+  breakdown: { regimes: RegimeSlice[]; components: ComponentSlice[] };
 };
 
 /**
@@ -91,11 +104,25 @@ function todayKst(): string {
   return new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
 }
 
-async function directionalStats(symbol: string, kind: string): Promise<DirectionalStats> {
+/**
+ * 지평별 실전 성적. `passed`로 두 레인을 가른다:
+ * - `true`  — 게이트·임계값을 통과한 신호. 대시보드가 "실전 적중률"로 보여주는 것.
+ * - `false` — 막힌 날. 매매 참고용이 아니라 **게이트를 검증하려고** 쌓는 표본이다.
+ *
+ * context가 없는 옛 행(2026-08-04 이전)은 전부 통과분이었으므로 passed 쪽으로 센다.
+ */
+async function directionalStats(
+  symbol: string,
+  kind: string,
+  passed: boolean,
+): Promise<DirectionalStats> {
+  const passedExpr = passed
+    ? sql`coalesce(${stockPredictions.context} ->> 'passed', 'true') = 'true'`
+    : sql`${stockPredictions.context} ->> 'passed' = 'false'`;
   const rows = await db
     .select({ status: stockPredictions.status, n: sql<number>`count(*)::int` })
     .from(stockPredictions)
-    .where(and(eq(stockPredictions.symbol, symbol), eq(stockPredictions.kind, kind)))
+    .where(and(eq(stockPredictions.symbol, symbol), eq(stockPredictions.kind, kind), passedExpr))
     .groupBy(stockPredictions.status);
   const count = (st: string) => rows.find((r) => r.status === st)?.n ?? 0;
   const confirmed = count('confirmed');
@@ -169,7 +196,8 @@ export async function getStockSignal(symbol: string): Promise<SignalResult> {
         target_bucket: target,
         stale: target < today,
         backtest: computeSignalBacktest(series, bars, h.trading_days),
-        live: await directionalStats(symbol, h.kind),
+        live: await directionalStats(symbol, h.kind, true),
+        blocked: await directionalStats(symbol, h.kind, false),
       };
     }),
   );
@@ -190,15 +218,19 @@ export async function getStockSignal(symbol: string): Promise<SignalResult> {
     horizons,
     weekly: computeWeeklyChanges(bars, 8),
     score_series: series.slice(-90),
+    breakdown: computeRegimeBreakdown(series, bars, 5),
   };
 }
 
 export type RecordReason =
   | 'recorded'
+  /** (더는 쓰지 않음 — 게이트 차단분도 기록한다. 옛 응답 호환용) */
   | 'watch_signal'
   | 'no_signal'
   | 'already_pending'
   | 'no_reference'
+  /** score 0 — 방향이 없어 반증 불가능하다 */
+  | 'no_direction'
   /** 기준 봉이 낡아 대상 거래일이 이미 지났다 — 사후 예측이 되므로 기록하지 않는다 */
   | 'stale_reference';
 
@@ -238,10 +270,14 @@ export async function recordStockSignal(symbol: string): Promise<RecordResult> {
     lanes: [],
   });
   if (!res.signal) return { ...fail('no_signal'), signal: null };
-  if (res.signal.signal === 'watch') return fail('watch_signal');
+  // score 0은 방향이 없어 반증 불가능하다 — 이때만 기록을 건너뛴다.
+  // 게이트에 막힌 날(passed=false)은 **기록한다**: 막힌 날의 결과를 모르면 게이트가
+  // 옳았는지 실전 데이터로 영영 판정할 수 없다.
+  if (!res.signal.raw_direction) return fail('no_direction');
   if (res.reference_close === null || !res.as_of) return fail('no_reference');
 
-  const dir = res.signal.signal;
+  const dir = res.signal.raw_direction;
+  const sig = res.signal;
   const refClose = res.reference_close;
   const asOf = res.as_of;
   const lanes: RecordResult['lanes'] = [];
@@ -291,7 +327,16 @@ export async function recordStockSignal(symbol: string): Promise<RecordResult> {
         analysis_id: null,
         authored_by: 'rule-signal',
         kind: h.kind,
-        claim: `규칙 신호 ${dir} (${h.label} 지평): ${bucket} 종가가 기준(${asOf} 종가 ${refClose.toLocaleString('ko-KR')}원)보다 ${dir === 'buy' ? '높은지' : '낮은지'} — score ${res.signal.score}/${res.signal.max_score}`,
+        claim: `규칙 ${dir} (${h.label} 지평, ${sig.passed ? '신호 발효' : '게이트 차단 — 검증용'}): ${bucket} 종가가 기준(${asOf} 종가 ${refClose.toLocaleString('ko-KR')}원)보다 ${dir === 'buy' ? '높은지' : '낮은지'} — score ${sig.score}/${sig.max_score}, 변동성 ${sig.volatility}`,
+        context: {
+          score: sig.score,
+          passed: sig.passed,
+          gated: sig.gated_by_volatility,
+          applied_threshold: sig.applied_threshold,
+          volatility: sig.volatility,
+          // 국면·컴포넌트를 박제해야 나중에 "어떤 장에서 무엇이 먹혔나"를 되물을 수 있다
+          components: Object.fromEntries(sig.components.map((c) => [c.key, c.value])),
+        },
         metric: 'daily_ohlcv',
         field: 'close',
         comparator: dir === 'buy' ? 'gt' : 'lt',

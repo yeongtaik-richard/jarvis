@@ -239,6 +239,13 @@ export const stockPredictions = pgTable(
     actualValue: doublePrecision('actual_value'),
     scoredAt: timestamp('scored_at', { withTimezone: true }),
     scoreNote: text('score_note'),
+    /**
+     * 판정 시점의 규칙 상태를 박제한다: { score, gated, passed, volatility, threshold }.
+     * `passed=false`는 게이트·임계값에 막힌 날 — 매매 판단용이 아니라 **게이트를
+     * 검증하려고** 남기는 표본이다. 통과분만 기록하면 규칙이 막은 날의 결과를 영영
+     * 알 수 없어 게이트를 실전 데이터로 평가할 수 없다.
+     */
+    context: jsonb('context'),
   },
   (t) => [
     index('ix_stock_predictions_symbol_created').on(t.symbol, sql`created_at desc`),

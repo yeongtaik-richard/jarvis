@@ -23,7 +23,7 @@ info:
     /api/stock/*: 별도 기능 — SK하이닉스(000660) 매매 **참고정보** 애그리게이터.
     수집기가 저장한 수급·일봉·외국인보유 스냅샷을 읽고, 그 값에 근거한 브리핑을 남긴다.
     자동매매·수익예측이 아니다. 매수/매도/목표가/등급은 스키마에 없고, 검증되지 않은 방향성 주장은 API가 거부한다.
-  version: '1.10.0'
+  version: '1.11.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -1136,6 +1136,43 @@ paths:
                         week_start: { type: string }
                         close: { type: number }
                         chg_pct: { type: [number, 'null'] }
+                  breakdown:
+                    type: object
+                    description: |
+                      "어떤 장에서 어떤 규칙이 먹히나" — 국면별·컴포넌트별 성능 분해
+                      (5거래일 지평, **게이트를 무시한 원시 방향** 기준).
+
+                      인용 규칙: 각 줄의 hit_rate는 **그 슬라이스의** baseline_up_rate와
+                      함께만 말할 것 — 국면마다 기저율이 다르므로(상승 추세 구간은 아무
+                      날이나 사도 잘 맞는다) 기저율을 빼지 않으면 동어반복이 된다.
+                      edge_pp가 그 뺄셈이다. n이 작은 줄과 수급 관련 줄은 특히 신뢰도가
+                      낮다 — 수급 이력이 30거래일뿐이라 표본이 한 구간에 몰려 있고,
+                      지평 창이 겹쳐 실질 독립 표본은 n보다 훨씬 적다. 전부 인샘플이므로
+                      규칙 개선의 출발점이지 결론이 아니다.
+                    properties:
+                      regimes:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            axis: { type: string, enum: [trend, volatility, flow] }
+                            value: { type: string }
+                            n: { type: integer }
+                            hits: { type: integer }
+                            hit_rate: { type: [number, 'null'] }
+                            baseline_up_rate: { type: [number, 'null'] }
+                            edge_pp: { type: [number, 'null'] }
+                      components:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            component: { type: string, enum: [trend, flow, relative_sox] }
+                            n: { type: integer }
+                            hits: { type: integer }
+                            hit_rate: { type: [number, 'null'] }
+                            baseline_up_rate: { type: [number, 'null'] }
+                            edge_pp: { type: [number, 'null'] }
                   score_series:
                     type: array
                     description: 규칙 점수를 과거에 재적용한 시계열 (최근 90거래일)
@@ -1190,7 +1227,19 @@ paths:
                             note: { type: string }
                         live:
                           type: object
-                          description: 실제로 기록·채점된 성적 (이 지평의 예측 레인)
+                          description: 통과한 신호의 실전 성적 — 이것이 규칙의 성적표다
+                          properties:
+                            pending: { type: integer }
+                            confirmed: { type: integer }
+                            refuted: { type: integer }
+                            scored: { type: integer }
+                            hit_rate: { type: [number, 'null'] }
+                        blocked:
+                          type: object
+                          description: |
+                            게이트·임계값에 **막힌** 날의 실전 성적. 매매 참고가 아니라
+                            게이트 검증용 표본이다 — 이쪽이 live보다 잘 맞으면 게이트가
+                            틀렸다는 증거다. 절대 매매 신호로 인용하지 말 것.
                           properties:
                             pending: { type: integer }
                             confirmed: { type: integer }

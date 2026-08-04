@@ -458,6 +458,34 @@ function ScoreSparkline({ points }: { points: SignalSeriesPoint[] }) {
   );
 }
 
+const COMPONENT_LABEL: Record<string, string> = {
+  trend: '추세 (MA 배열)',
+  flow: '수급 (외국인)',
+  relative_sox: '상대강도 (SOX 대비)',
+};
+const AXIS_LABEL: Record<string, string> = {
+  trend: '추세',
+  volatility: '변동성',
+  flow: '수급',
+};
+const REGIME_VALUE_LABEL: Record<string, string> = {
+  up: '상승',
+  down: '하락',
+  sideways: '횡보',
+  calm: '낮음',
+  normal: '보통',
+  elevated: '높음',
+  extreme: '극단',
+  foreign_buying: '외국인 순매수',
+  foreign_selling: '외국인 순매도',
+  mixed: '엇갈림',
+  unknown: '이력 없음',
+};
+const edgePct = (v: number | null): string => (v === null ? '—' : `${Math.round(v * 100)}%`);
+/** 차이 칸은 상태색 — 빨강·파랑은 가격 방향 전용이다. */
+const edgeClass = (pp: number | null): string =>
+  pp === null ? '' : pp > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-zinc-500';
+
 function kstTime(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('ko-KR', {
@@ -780,6 +808,16 @@ export default async function StockDashboardPage() {
                             : h.live.pending > 0
                               ? `대기 ${h.live.pending}`
                               : '없음'}
+                          {/* 게이트에 막힌 날도 쌓는다 — 이 표본이 통과분보다 잘 맞으면
+                              게이트가 틀렸다는 실전 증거가 된다 */}
+                          {(h.blocked.scored > 0 || h.blocked.pending > 0) && (
+                            <span className="block text-[10px] text-zinc-400">
+                              차단분{' '}
+                              {h.blocked.scored > 0
+                                ? `${Math.round((h.blocked.hit_rate ?? 0) * 100)}% (${h.blocked.scored})`
+                                : `대기 ${h.blocked.pending}`}
+                            </span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -787,6 +825,84 @@ export default async function StockDashboardPage() {
                 </tbody>
               </table>
             </div>
+            {/* 국면·컴포넌트 분해 — 규칙 개선의 작업대. 기본은 접어둔다. */}
+            <details>
+              <summary className="cursor-pointer select-none text-xs text-zinc-500 py-2">
+                어떤 장에서 무엇이 먹혔나 (국면·컴포넌트 분해)
+              </summary>
+              <div className="mt-1 space-y-3">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs tabular-nums">
+                    <thead className="text-zinc-500">
+                      <tr>
+                        <th className="text-left font-normal py-1">컴포넌트</th>
+                        <th className="text-right font-normal py-1">n</th>
+                        <th className="text-right font-normal py-1">적중</th>
+                        <th className="text-right font-normal py-1">기저율</th>
+                        <th className="text-right font-normal py-1">차이</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {signalResult.breakdown.components.map((c) => (
+                        <tr key={c.component} className="border-t border-zinc-100 dark:border-zinc-900">
+                          <td className="py-1.5">{COMPONENT_LABEL[c.component] ?? c.component}</td>
+                          <td className="py-1.5 text-right text-zinc-500">{c.n}</td>
+                          <td className="py-1.5 text-right">{edgePct(c.hit_rate)}</td>
+                          <td className="py-1.5 text-right text-zinc-500">
+                            {edgePct(c.baseline_up_rate)}
+                          </td>
+                          <td className={`py-1.5 text-right font-medium ${edgeClass(c.edge_pp)}`}>
+                            {c.edge_pp === null ? '—' : `${c.edge_pp > 0 ? '+' : ''}${c.edge_pp}%p`}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs tabular-nums">
+                    <thead className="text-zinc-500">
+                      <tr>
+                        <th className="text-left font-normal py-1">국면</th>
+                        <th className="text-right font-normal py-1">n</th>
+                        <th className="text-right font-normal py-1">적중</th>
+                        <th className="text-right font-normal py-1">기저율</th>
+                        <th className="text-right font-normal py-1">차이</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {signalResult.breakdown.regimes
+                        .filter((r) => r.n >= 8)
+                        .map((r) => (
+                          <tr
+                            key={`${r.axis}-${r.value}`}
+                            className="border-t border-zinc-100 dark:border-zinc-900"
+                          >
+                            <td className="py-1.5">
+                              <span className="text-zinc-400">{AXIS_LABEL[r.axis] ?? r.axis} </span>
+                              {REGIME_VALUE_LABEL[r.value] ?? r.value}
+                            </td>
+                            <td className="py-1.5 text-right text-zinc-500">{r.n}</td>
+                            <td className="py-1.5 text-right">{edgePct(r.hit_rate)}</td>
+                            <td className="py-1.5 text-right text-zinc-500">
+                              {edgePct(r.baseline_up_rate)}
+                            </td>
+                            <td className={`py-1.5 text-right font-medium ${edgeClass(r.edge_pp)}`}>
+                              {r.edge_pp === null ? '—' : `${r.edge_pp > 0 ? '+' : ''}${r.edge_pp}%p`}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-[11px] text-zinc-400">
+                  5거래일 지평 · <strong>게이트를 무시한 원시 방향</strong> 기준이다(막힌 날을
+                  빼면 게이트를 평가할 수 없다). 인샘플이고, n이 작은 줄과 수급 관련 줄은 특히
+                  못 믿는다 — 수급 이력이 30거래일뿐이라 표본이 한 구간에 몰려 있고, 5일 창이
+                  서로 겹쳐 실질 독립 표본은 n보다 훨씬 적다. 규칙 개선의 출발점이지 결론이 아니다.
+                </p>
+              </div>
+            </details>
             <p className="text-[11px] text-zinc-400">
               같은 규칙·같은 점수를 두 시점에 채점한다. <strong>차이</strong>가 결론이다 —
               적중률만 보면 상승장 착시고, 기저율(무작위 매수)을 넘어선 만큼이 규칙의 몫이다.
