@@ -602,8 +602,12 @@ export default async function StockDashboardPage() {
     new Date(new Date(intradaySnap.as_of_at).getTime() + 9 * 3_600_000)
       .toISOString()
       .slice(0, 10) === todayKst;
+  // 오늘 일봉이 확정됐으면 **그게 정답이다.** 장중 스냅샷은 마감 전 마지막 관측일 뿐이라,
+  // 확정 후에도 그걸 보여주면 종가와 다른 값이 첫 화면에 남는다 (2026-08-04: 확정 종가
+  // 1,577,000인데 히어로는 14:51의 1,558,000을 띄웠다).
+  const settledToday = closePoints[closePoints.length - 1]?.date === todayKst;
   let hero: { price: number; rate: number | null; label: string } | null = null;
-  if (intradayIsToday && intradaySnap) {
+  if (!settledToday && intradayIsToday && intradaySnap) {
     const p = intradaySnap.payload as Record<string, unknown>;
     const price = Number(p.price);
     const rate = Number(p.change_rate);

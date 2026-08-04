@@ -98,7 +98,10 @@ const GRACE_MIN = 180;
  * @param closed 휴장인 평일 (YYYY-MM-DD). 넘기면 휴장일을 건너뛰어 `missed` 오탐을
  *   막는다. 비워두면 주말만 거른다(예전 동작).
  */
-export function lastExpectedCloseRun(now: Date, closed?: Set<string>): Date | null {
+export function lastExpectedCloseRun(
+  now: Date,
+  closed?: Set<string>,
+): { scheduledAt: Date; deadline: Date } | null {
   for (let back = 0; back < 10; back++) {
     const shifted = new Date(now.getTime() + KST_OFFSET_MS - back * 86_400_000);
     const dow = shifted.getUTCDay(); // shifted의 UTC 필드 = KST 벽시계
@@ -110,8 +113,10 @@ export function lastExpectedCloseRun(now: Date, closed?: Set<string>): Date | nu
       shifted.getUTCMonth(),
       shifted.getUTCDate(),
     );
-    const expected = new Date(kstMidnight + (CLOSE_RUN_MIN + GRACE_MIN) * 60_000 - KST_OFFSET_MS);
-    if (expected <= now) return expected;
+    const scheduledAt = new Date(kstMidnight + CLOSE_RUN_MIN * 60_000 - KST_OFFSET_MS);
+    const deadline = new Date(scheduledAt.getTime() + GRACE_MIN * 60_000);
+    // 유예가 지난 가장 최근 거래일을 찾는다 — 그 전엔 아직 늦었다고 말할 수 없다
+    if (deadline <= now) return { scheduledAt, deadline };
   }
   return null;
 }
@@ -166,11 +171,16 @@ export async function getCollectorHealth(
   const expected = lastExpectedCloseRun(now, calendar.closed);
   const okAt = lastOk?.finishedAt ?? lastOk?.startedAt ?? null;
 
+  // 유예(3시간)는 **언제부터 불평할지**를 정하는 값이지, 성공이 그 뒤에 와야 한다는
+  // 뜻이 아니다. 예전엔 okAt을 유예 끝(21:43)과 비교해서, 20:48에 멀쩡히 성공한 날에도
+  // 경고가 떴다 (2026-08-04 실제 발생). 비교 대상은 **예정 시각(18:43)**이다.
+  const missed = expected !== null && (okAt === null || okAt < expected.scheduledAt);
+
   return {
     last_run: lastRun ? toApiCollectorRun(lastRun) : null,
     last_ok_run: lastOk ? toApiCollectorRun(lastOk) : null,
-    expected_close_run_at: expected ? expected.toISOString() : null,
-    missed: expected !== null && (okAt === null || okAt < expected),
+    expected_close_run_at: expected ? expected.scheduledAt.toISOString() : null,
+    missed,
     hours_since_ok: okAt ? (now.getTime() - okAt.getTime()) / 3_600_000 : null,
     latest_snapshots: snaps.map((s) => ({
       metric: s.metric,
