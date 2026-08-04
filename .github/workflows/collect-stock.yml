@@ -13,6 +13,13 @@ on:
     # Intraday sweep, hourly 09:00-15:00 KST weekdays (00:00-06:00 UTC). Stores a
     # separate intraday_price metric — never the daily bar, which isn't settled yet.
     - cron: '0 0-6 * * 1-5'
+    # Closing price, 15:35 KST weekdays (06:35 UTC). The 15:00 sweep above used to be
+    # the last one, and GitHub's delay pushed it past the old 15:30 collection cutoff —
+    # so the closing price was never captured and the last observed price each day was
+    # 40-60 min stale. This run lands inside the close-capture window and its snapshot
+    # is pinned to the 15:00 bucket. The routine also triggers this on demand, which is
+    # the reliable path; this cron is the safety net.
+    - cron: '35 6 * * 1-5'
   workflow_dispatch: # manual trigger for testing / one-off backfills / routine dispatch
     inputs:
       backfill_days:

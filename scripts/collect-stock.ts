@@ -74,13 +74,42 @@ function settledToday(): boolean {
   return new Date(Date.now() + KST).getUTCHours() >= SETTLE_HOUR_KST;
 }
 
-/** 정규장(평일 09:00~15:30 KST) 안인가. 장 밖 인트라데이 수집은 같은 값의 반복일 뿐이다. */
-function marketOpenNow(): boolean {
-  const kst = new Date(Date.now() + KST);
+/** KRX 정규장 마감 (15:30 KST). 종가단일가가 이 시각에 확정된다. */
+const CLOSE_MIN_KST = 15 * 60 + 30;
+/**
+ * 마감 후 종가를 잡을 수 있는 시각 상한. `inquire-price`는 장이 끝난 뒤에도 마지막
+ * 체결가(=종가)를 그대로 돌려주므로, 이 창 안의 수집은 종가를 확보한다.
+ */
+const CLOSE_CAPTURE_UNTIL_KST = 16 * 60 + 30;
+
+// now를 받는 이유: 창 경계(15:30 / 16:30)는 테스트 없이 믿을 값이 아니다.
+export function kstMinuteOfDay(now = Date.now()): { min: number; weekday: boolean } {
+  const kst = new Date(now + KST);
   const dow = kst.getUTCDay();
-  if (dow === 0 || dow === 6) return false;
-  const min = kst.getUTCHours() * 60 + kst.getUTCMinutes();
-  return min >= 9 * 60 && min <= 15 * 60 + 30;
+  return {
+    min: kst.getUTCHours() * 60 + kst.getUTCMinutes(),
+    weekday: dow !== 0 && dow !== 6,
+  };
+}
+
+/**
+ * 장중 수집을 해도 되는 시각인가 — 정규장 + **마감 후 종가 확보 창**.
+ *
+ * 예전엔 15:30에서 딱 끊었는데, 그러면 **종가가 한 번도 수집되지 않았다.** 정기 크론은
+ * 15:00 KST분이 GitHub 지연으로 15:30 넘어 도착해 이 게이트에 막혔고, 루틴은 close
+ * 모드로 넘어가 수집을 부르지 않았다. 그 결과 매일 마지막 관측치가 마감 40~60분 전
+ * 값이었다 (2026-08-04: 14:51이 마지막, 그 사이 반등 구간이 통째로 안 보였다).
+ */
+export function intradayCollectable(now = Date.now()): boolean {
+  const { min, weekday } = kstMinuteOfDay(now);
+  if (!weekday) return false;
+  return min >= 9 * 60 && min <= CLOSE_CAPTURE_UNTIL_KST;
+}
+
+/** 정규장이 이미 끝났는가 — 이때 받은 현재가는 종가다. */
+export function afterCloseNow(now = Date.now()): boolean {
+  const { min, weekday } = kstMinuteOfDay(now);
+  return weekday && min > CLOSE_MIN_KST;
 }
 
 /**
@@ -260,16 +289,22 @@ async function main(): Promise<void> {
   // 위 §확정 전 값 규칙에 걸리고, KIS 호출만 낭비된다.
   if (kind === 'intraday') {
     try {
-      if (!marketOpenNow()) {
-        console.log('[collect] intraday: 장 시간 밖이라 수집하지 않음');
+      if (!intradayCollectable()) {
+        console.log('[collect] intraday: 수집 창(09:00~16:30 KST) 밖이라 수집하지 않음');
       } else {
         const at = new Date();
         const q = await currentQuote(kisToken, creds, SYMBOL);
+        // 마감 후 수집은 **15:00 버킷에 넣는다.** 현재 시각 버킷(16:00 등)에 넣으면
+        // 장이 끝난 뒤에도 거래가 있었던 것처럼 궤적이 늘어난다. 종가는 그날 마지막
+        // 시간대의 값이고, 같은 버킷을 덮어쓰므로 여러 번 돌아도 안전하다.
+        const bucket = afterCloseNow()
+          ? `${today.dashed}T15:00+09:00`
+          : kstHourBucket(at);
         queue.push({
           symbol: SYMBOL,
           source: 'kis',
           metric: 'intraday_price',
-          bucket_key: kstHourBucket(at),
+          bucket_key: bucket,
           trading_date_kst: today.dashed,
           as_of_at: at.toISOString(),
           collector_run_id: runId,
@@ -344,7 +379,7 @@ async function main(): Promise<void> {
           },
         });
         console.log(
-          `[collect] intraday_price ${kstHourBucket(at)} (${q.price}원, ${q.changeRate}%) + foreign_holding ${q.foreignRatio}%`,
+          `[collect] intraday_price ${bucket}${afterCloseNow() ? ' (종가)' : ''} (${q.price}원, ${q.changeRate}%) + foreign_holding ${q.foreignRatio}%`,
         );
       }
     } catch (e) {
@@ -735,7 +770,11 @@ function required(name: string): string {
   return v;
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// 직접 실행일 때만 돈다. 이 파일에서 게이트 함수를 import해 테스트할 수 있어야 하고,
+// import만으로 수집이 시작되면 실수로 실데이터를 건드리게 된다.
+if (require.main === module) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
