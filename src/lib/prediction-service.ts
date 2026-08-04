@@ -1,4 +1,5 @@
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { cache } from 'react';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { stockPredictions, stockSnapshots, type StockPrediction } from '@/db/schema';
 import { HttpError } from './errors';
@@ -97,6 +98,13 @@ export async function createPrediction(
   return row;
 }
 
+/**
+ * 요청 1회당 한 번만 돈다. searchPredictions·predictionStats·getPredictionLedger가
+ * 각각 "조회가 곧 채점" 규약으로 부르는데, 셋 다 같은 페이지에서 불려서 같은 일을
+ * 세 번 했다. 채점 자체는 멱등이라 결과는 같았지만 왕복만 3배였다.
+ */
+export const scorePending = cache(scorePendingUncached);
+
 const CMP: Record<string, (v: number, t: number) => boolean> = {
   gt: (v, t) => v > t,
   gte: (v, t) => v >= t,
@@ -111,28 +119,38 @@ const CMP: Record<string, (v: number, t: number) => boolean> = {
  * - 스냅샷 있음 → 필드 비교 → confirmed / refuted. 필드가 없거나 숫자가 아니면 unverifiable.
  * - 스냅샷 없음 + 대상 날짜가 3일 넘게 지남 → expired (휴장일 예측, 수집 누락 등).
  */
-export async function scorePending(symbol: string): Promise<number> {
+async function scorePendingUncached(symbol: string): Promise<number> {
   const pending = await db
     .select()
     .from(stockPredictions)
     .where(and(eq(stockPredictions.symbol, symbol), eq(stockPredictions.status, 'pending')));
   if (!pending.length) return 0;
 
+  // 대상 스냅샷을 **한 번에** 가져온다. 건별로 왕복하면 Neon 서버리스에서 건당
+  // ~100ms라 12건이면 1.2초가 되고, 이 함수는 페이지 한 번에 여러 곳에서 불린다.
+  // metric × bucket 교차곱이라 필요 없는 조합도 딸려오지만, Map 조회가 정확한 짝만
+  // 집어내므로 문제없다. 몇 행 더 읽는 값으로 왕복 N회를 1회로 줄인다.
+  const snapRows = await db
+    .select({
+      metric: stockSnapshots.metric,
+      bucketKey: stockSnapshots.bucketKey,
+      payload: stockSnapshots.payload,
+    })
+    .from(stockSnapshots)
+    .where(
+      and(
+        eq(stockSnapshots.symbol, symbol),
+        inArray(stockSnapshots.metric, [...new Set(pending.map((p) => p.metric))]),
+        inArray(stockSnapshots.bucketKey, [...new Set(pending.map((p) => p.targetBucket))]),
+      ),
+    );
+  const snapByKey = new Map(snapRows.map((r) => [`${r.metric}\u0000${r.bucketKey}`, r]));
+
   const today = kstToday();
   let scored = 0;
 
   for (const p of pending) {
-    const [snap] = await db
-      .select({ payload: stockSnapshots.payload })
-      .from(stockSnapshots)
-      .where(
-        and(
-          eq(stockSnapshots.symbol, p.symbol),
-          eq(stockSnapshots.metric, p.metric),
-          eq(stockSnapshots.bucketKey, p.targetBucket),
-        ),
-      )
-      .limit(1);
+    const snap = snapByKey.get(`${p.metric}\u0000${p.targetBucket}`);
 
     if (snap) {
       const v = Number((snap.payload as Record<string, unknown>)[p.field]);

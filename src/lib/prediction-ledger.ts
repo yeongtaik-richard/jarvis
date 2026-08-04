@@ -66,6 +66,12 @@ export type PredictionLedger = {
   settled: LedgerEntry[];
   /** 지금 걸려 있는 것 — 미래에 채점된다 (target 오름차순) */
   open: LedgerEntry[];
+  /**
+   * 채점하지 못하고 끝난 것 (expired/unverifiable). **이걸 안 보여주면 채점 실패가
+   * 조용히 증발한다** — 휴장일을 대상으로 잡았거나 수집이 빠진 날이라, 표본이
+   * 안 쌓이는 이유를 여기서만 알 수 있다.
+   */
+  unscored: LedgerEntry[];
   /** 통과 신호만의 누적 성적 */
   running: RunningRecord;
   /** 게이트 차단분의 누적 성적 — 통과분보다 좋으면 게이트가 틀렸다는 증거 */
@@ -160,6 +166,7 @@ export async function getPredictionLedger(
       .filter((e) => e.status === 'confirmed' || e.status === 'refuted')
       .slice(0, opts.settledLimit ?? 12),
     open: pending.filter((e) => e.target > today).sort((a, b) => a.target.localeCompare(b.target)),
+    unscored: all.filter((e) => e.status === 'expired' || e.status === 'unverifiable').slice(0, 6),
     running: record(all.filter((e) => e.passed)),
     running_blocked: record(all.filter((e) => !e.passed)),
   };

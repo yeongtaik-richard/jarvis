@@ -44,6 +44,12 @@ function sentence(e: LedgerEntry): string {
   if (e.status === 'pending') {
     return `${md(e.as_of)} 마감에 "${dir}"${gate} → ${md(e.target)} 종가로 판가름`;
   }
+  if (e.status === 'expired') {
+    return `${md(e.as_of)}에 "${dir}"${gate} → ${md(e.target)} 종가가 끝내 안 들어와 채점 못 함 (휴장일이거나 수집 누락)`;
+  }
+  if (e.status === 'unverifiable') {
+    return `${md(e.as_of)}에 "${dir}"${gate} → ${md(e.target)} 데이터가 채점 불가 형태`;
+  }
   if (e.status === 'confirmed' || e.status === 'refuted') {
     const moved =
       e.change_pct === null
@@ -132,8 +138,10 @@ function RecordLine({ label, r, muted }: { label: string; r: RunningRecord; mute
 }
 
 export function PredictionLedgerCard({ ledger }: { ledger: PredictionLedger }) {
-  const { due, settled, open, running, running_blocked } = ledger;
-  if (due.length === 0 && settled.length === 0 && open.length === 0) return null;
+  const { due, settled, open, unscored, running, running_blocked } = ledger;
+  if (due.length === 0 && settled.length === 0 && open.length === 0 && unscored.length === 0) {
+    return null;
+  }
 
   return (
     <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 space-y-3">
@@ -171,6 +179,16 @@ export function PredictionLedgerCard({ ledger }: { ledger: PredictionLedger }) {
         <div>
           <div className="text-[11px] text-zinc-400 mb-0.5">걸려 있는 것</div>
           {open.map((e) => (
+            <Row key={e.id} e={e} />
+          ))}
+        </div>
+      )}
+
+      {unscored.length > 0 && (
+        <div>
+          {/* 채점 실패는 숨기면 안 된다 — 표본이 왜 안 쌓이는지가 여기 있다 */}
+          <div className="text-[11px] text-zinc-400 mb-0.5">채점하지 못한 것</div>
+          {unscored.map((e) => (
             <Row key={e.id} e={e} />
           ))}
         </div>

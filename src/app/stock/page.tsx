@@ -432,10 +432,11 @@ function ScoreSparkline({ points }: { points: SignalSeriesPoint[] }) {
   const x = (i: number) => padX + (i / (points.length - 1)) * (W - padX * 2);
   const line = points.map((p, i) => `${i ? 'L' : 'M'} ${x(i).toFixed(1)} ${y(p.score).toFixed(1)}`).join(' ');
   return (
-    <div className="viz">
+    // 폭 상한이 없으면 svg가 viewBox 비율을 지키느라 데스크탑에서 320px로 쪼그라들어
+    // 가운데 떠 보인다. 상한을 두고 h-auto로 비율대로 키운다.
+    <div className="viz max-w-[560px]">
       <svg
-        width="100%"
-        height={H}
+        className="w-full h-auto"
         viewBox={`0 0 ${W} ${H}`}
         role="img"
         aria-label={`규칙 점수 추이, 최근 ${points.length}거래일, 범위 -3에서 +3`}
@@ -483,6 +484,8 @@ const REGIME_VALUE_LABEL: Record<string, string> = {
   mixed: '엇갈림',
   unknown: '이력 없음',
 };
+/** 이보다 표본이 적은 슬라이스는 표에 올리지 않는다 — 숫자가 노이즈다. */
+const REGIME_MIN_N = 8;
 const edgePct = (v: number | null): string => (v === null ? '—' : `${Math.round(v * 100)}%`);
 /** 차이 칸은 상태색 — 빨강·파랑은 가격 방향 전용이다. */
 const edgeClass = (pp: number | null): string =>
@@ -525,7 +528,17 @@ export default async function StockDashboardPage() {
 
   // 추이 차트용 이력 — 대시보드는 단일 종목이라 최신 스냅샷의 symbol을 따른다.
   const symbol = items[0]?.symbol ?? '000660';
-  const [ohlcvRows, flowRows, health, eventRows, regimeResult, predRows, predStats, signalResult] = await Promise.all([
+  const [
+    ohlcvRows,
+    flowRows,
+    health,
+    eventRows,
+    regimeResult,
+    predRows,
+    predStats,
+    signalResult,
+    ledger,
+  ] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', HISTORY_DAYS),
     getStockHistory(symbol, 'investor_flow', HISTORY_DAYS),
     getCollectorHealth(symbol),
@@ -534,9 +547,8 @@ export default async function StockDashboardPage() {
     searchPredictions(PredictionQuery.parse({ symbol, limit: 8 })),
     predictionStats(symbol),
     getStockSignal(symbol),
+    getPredictionLedger(symbol),
   ]);
-  // 장부는 조회가 곧 채점이라 신호 계산과 순서를 두지 않는다 (둘 다 scorePending 호출).
-  const ledger = await getPredictionLedger(symbol);
   const events = eventRows.map(toApiMarketEvent);
   const closePoints: ClosePoint[] = ohlcvRows
     .map((r) => ({ date: r.bucketKey, close: payloadNum(r.payload, 'close') }))
@@ -589,7 +601,11 @@ export default async function StockDashboardPage() {
       hero = {
         price,
         rate: Number.isFinite(rate) ? rate : null,
-        label: `장중 · ${kstTime(intradaySnap.as_of_at)} 기준`,
+        // 오늘 장중 스냅샷이어도 지금이 장중이라는 뜻은 아니다 — 15:30 이후엔
+        // "장중"이 거짓이고, 종가 수집(18:43) 전까지는 확정 전 값이다.
+        label: marketOpen
+          ? `장중 · ${kstTime(intradaySnap.as_of_at)} 기준`
+          : `${kstTime(intradaySnap.as_of_at)} 기준 · 종가 확정 전`,
       };
     }
   } else if (closePoints.length >= 1) {
@@ -664,6 +680,14 @@ export default async function StockDashboardPage() {
                   >
                     {health.last_run.status}
                   </span>
+                  {/* 무엇이 실패했는지 없이 배지만 띄우면 불안만 남는다. partial은 대개
+                      부수 소스(뉴스·ADR) 실패라 핵심 지표와 무관하다. */}
+                  {health.last_run.error && (
+                    <span className="text-xs text-zinc-400">
+                      {' '}
+                      ({health.last_run.error.split(':')[0]?.slice(0, 40)})
+                    </span>
+                  )}
                 </>
               )}
             </>
@@ -880,7 +904,7 @@ export default async function StockDashboardPage() {
                     </thead>
                     <tbody>
                       {signalResult.breakdown.regimes
-                        .filter((r) => r.n >= 8)
+                        .filter((r) => r.n >= REGIME_MIN_N && r.value !== 'unknown')
                         .map((r) => (
                           <tr
                             key={`${r.axis}-${r.value}`}
@@ -904,6 +928,14 @@ export default async function StockDashboardPage() {
                   </table>
                 </div>
                 <p className="text-[11px] text-zinc-400">
+                  {(() => {
+                    const dropped = signalResult.breakdown.regimes.filter(
+                      (r) => r.n < REGIME_MIN_N || r.value === 'unknown',
+                    ).length;
+                    return dropped > 0
+                      ? `표본 ${REGIME_MIN_N}건 미만이거나 지표 이력이 없는 슬라이스 ${dropped}개는 뺐다. `
+                      : '';
+                  })()}
                   5거래일 지평 · <strong>게이트를 무시한 원시 방향</strong> 기준이다(막힌 날을
                   빼면 게이트를 평가할 수 없다). 인샘플이고, n이 작은 줄과 수급 관련 줄은 특히
                   못 믿는다 — 수급 이력이 30거래일뿐이라 표본이 한 구간에 몰려 있고, 5일 창이
@@ -914,10 +946,12 @@ export default async function StockDashboardPage() {
             <p className="text-[11px] text-zinc-400">
               같은 규칙·같은 점수를 두 시점에 채점한다. <strong>차이</strong>가 결론이다 —
               적중률만 보면 상승장 착시고, 기저율(무작위 매수)을 넘어선 만큼이 규칙의 몫이다.
-              하루 지평은 표본이 5배 빨리 쌓여 실전 검증이 먼저 끝난다.
+              두 지평 모두 매 거래일 1건씩 쌓이고, 다른 건 채점이 끝나는 시점이다(다음날 vs
+              5거래일 뒤). 일주일 지평은 창이 서로 겹쳐서 표본 n개가 독립 n개가 아니다.{' '}
+              {signalResult.horizons[0]?.backtest.note}
             </p>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 pt-1">
-              {signalResult.signal.disclaimer} {signalResult.horizons[0]?.backtest.note}
+              {signalResult.signal.disclaimer}
             </p>
           </section>
         )}

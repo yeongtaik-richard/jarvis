@@ -60,8 +60,10 @@ const EXTREME_VOL_THRESHOLD = 3;
 /** SOX 대비 20일 초과수익이 이 %p를 넘어야 상대강도 컴포넌트가 켜진다. */
 const RS_EXCESS_PCT = 5;
 
+// 화면의 "미검증 · 실전 표본" 배지와 지평 표가 이미 표본·기저율을 보여주므로,
+// 여기서는 그 둘이 못 하는 말만 한다 — 이건 규칙의 출력이지 매매 지시가 아니라는 것.
 export const SIGNAL_DISCLAIMER =
-  '규칙 기반 미검증 신호다. 매매 지시가 아니며, directional 적중률 표본과 함께만 읽을 것.';
+  '규칙의 출력이지 매매 지시가 아니다. 임계값은 src/lib/stock-signal.ts에 전부 드러나 있다.';
 
 export function computeSignal(
   ind: Indicators | null,

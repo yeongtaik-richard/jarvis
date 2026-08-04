@@ -351,6 +351,7 @@ async function main(): Promise<void> {
     }
     await collectEvents(apiToken, runId, errors);
     await flush(apiToken, runId, kind, queue, errors);
+    finishRun(errors);
     return;
   }
 
@@ -620,33 +621,58 @@ async function main(): Promise<void> {
   // 4) 공시·뉴스. 백필은 과거 데이터 적재라 이벤트를 다시 긁을 이유가 없다.
   if (!backfill) await collectEvents(apiToken, runId, errors);
 
-  await flush(apiToken, runId, kind, queue, errors);
+  const { posted } = await flush(apiToken, runId, kind, queue, errors);
 
-  // 5) 마감 수집이 성공했으면(위 flush는 실패 시 exit) 오늘 신호를 기록한다.
-  //    LLM 세션에 맡기지 않는 이유: 신호 기록은 결정론적이어야 하고, 루틴이 안 떠도
-  //    표본이 쌓여야 한다. 서버가 watch/중복이면 알아서 기록하지 않는다.
+  // 5) 스냅샷이 올라간 뒤 오늘 신호를 기록한다. **flush의 exit보다 먼저** 와야 한다 —
+  //    부수적인 실패 하나(adr_price 초당 호출 제한, DART 일시 장애) 때문에 그날 예측
+  //    표본이 통째로 사라지면 안 된다. 2026-07-31 close(partial)에서 실제로 그랬다.
+  //    핵심 스냅샷이 하나도 안 올라갔을 때만 건너뛴다 — 그땐 신호가 어제 봉으로 계산돼
+  //    기준일이 어긋난다.
   if (kind === 'close' && !backfill) {
-    try {
-      const res = await fetch(`${BASE}/api/stock/signal?symbol=${SYMBOL}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${apiToken}` },
-      });
-      const body = (await res.json()) as { recorded?: boolean; reason?: string };
-      console.log(`[collect] signal ${res.status} recorded=${body.recorded} (${body.reason})`);
-    } catch (e) {
-      console.warn(`[collect] signal record failed: ${String(e)}`); // 신호 실패가 수집을 망치지 않게
+    const coreQueued = queue.some(
+      (q) => q.metric === 'daily_ohlcv' || q.metric === 'investor_flow',
+    );
+    if (!coreQueued || posted === 0) {
+      console.warn('[collect] signal skipped: 핵심 스냅샷이 올라가지 않았다');
+    } else {
+      try {
+        const res = await fetch(`${BASE}/api/stock/signal?symbol=${SYMBOL}`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${apiToken}` },
+        });
+        const body = (await res.json()) as { recorded?: boolean; reason?: string };
+        console.log(`[collect] signal ${res.status} recorded=${body.recorded} (${body.reason})`);
+      } catch (e) {
+        console.warn(`[collect] signal record failed: ${String(e)}`); // 신호 실패가 수집을 망치지 않게
+      }
     }
   }
+
+  // 실패 종료는 맨 마지막. 여기까지 와야 부분 실패에도 신호가 기록된다.
+  finishRun(errors);
 }
 
-/** 모아둔 스냅샷을 오래된 순으로 POST하고, 실행 결과를 보고하고, 실패면 non-zero로 끝낸다. */
+/**
+ * 종료 코드를 정한다. **flush에서 분리한 이유**: flush 직후에 끝내면 부분 실패
+ * 하나로 그날 신호 기록까지 잃는다. 호출부가 남은 일을 다 마친 뒤 부른다.
+ */
+function finishRun(errors: string[]): void {
+  if (errors.length) {
+    console.error(`[collect] ${errors.length} error(s):`);
+    for (const e of errors) console.error('  - ' + e);
+    process.exit(1);
+  }
+  console.log('[collect] done');
+}
+
+/** 모아둔 스냅샷을 오래된 순으로 POST하고 실행 결과를 보고한다. 종료 코드는 호출부가 정한다. */
 async function flush(
   apiToken: string,
   runId: string,
   kind: string,
   queue: SnapshotInput[],
   errors: string[],
-): Promise<void> {
+): Promise<{ posted: number }> {
   // 한 날짜가 실패해도 나머지 구간은 계속 올린다.
   let posted = 0;
   for (const snap of queue) {
@@ -670,12 +696,8 @@ async function flush(
     error: errors.length ? errors.join('\n').slice(0, 4000) : null,
   });
 
-  if (errors.length) {
-    console.error(`[collect] ${errors.length} error(s):`);
-    for (const e of errors) console.error('  - ' + e);
-    process.exit(1);
-  }
-  console.log('[collect] done');
+  // **여기서 exit하지 않는다.** 호출부가 신호 기록까지 마친 뒤 종료 코드를 정한다.
+  return { posted };
 }
 
 function required(name: string): string {
