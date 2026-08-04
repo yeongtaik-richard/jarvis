@@ -707,7 +707,7 @@ export default async function StockDashboardPage() {
                 ? `${kstTime(health.last_ok_run.finished_at ?? health.last_ok_run.started_at)} (${Math.round(health.hours_since_ok ?? 0)}시간 전)`
                 : '없음'}
               {health.last_run?.error ? ` · ${health.last_run.error.slice(0, 160)}` : ''}
-              . KRX 공휴일이면 정상입니다 — 스케줄은 휴장일을 모릅니다.
+              . 휴장일은 이미 제외하고 계산했으니, 이 경고는 실제 수집 실패입니다.
             </p>
           </div>
         )}
@@ -806,6 +806,12 @@ export default async function StockDashboardPage() {
                           {h.stale && (
                             <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
                               기준 낡음
+                            </span>
+                          )}
+                          {/* 달력을 아는 범위를 넘어가면 대상일이 휴장일일 수 있다 */}
+                          {h.beyond_known_calendar && (
+                            <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                              달력 범위 밖
                             </span>
                           )}
                         </td>

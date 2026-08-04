@@ -23,6 +23,7 @@ import {
   type Flow,
   type WeeklyChange,
 } from './stock-indicators';
+import { getMarketCalendar, nextTradingDay } from './market-calendar';
 import { getStockRegime } from './stock-regime-service';
 import { getStockHistory } from './stock-service';
 
@@ -36,6 +37,8 @@ export type HorizonView = {
   trading_days: number;
   /** 이 지평의 신호가 채점될 거래일 (기준 봉 as_of 기준) */
   target_bucket: string;
+  /** 달력을 아는 범위를 넘어간 추정치인가 — 그러면 대상일이 휴장일일 수 있다 */
+  beyond_known_calendar: boolean;
   /**
    * 대상 거래일이 **엄밀히 과거**인가 — 기준 봉이 낡았다는 뜻이다(마감 수집 누락 등).
    * 이 상태로 기록하면 결과를 이미 아는 채로 예측하는 꼴이라 기록을 건너뛴다.
@@ -86,20 +89,6 @@ export type SignalResult = {
   breakdown: { regimes: RegimeSlice[]; components: ComponentSlice[] };
 };
 
-/**
- * 기준 거래일 + N일 → 대상 거래일. **"오늘"이 아니라 기준 봉에서 잰다** — 백테스트는
- * 신호일 종가를 진입점으로 채점하는데 기록만 오늘 기준이면 둘이 다른 걸 재게 된다.
- * 주말이면 다음 평일로. KRX 공휴일은 모른다 — 그 경우 채점기가 expired 처리한다.
- */
-function tradingDayAfter(baseDate: string, days: number): string {
-  const d = new Date(`${baseDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  const dow = d.getUTCDay();
-  if (dow === 6) d.setUTCDate(d.getUTCDate() + 2);
-  if (dow === 0) d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
-
 function todayKst(): string {
   return new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
 }
@@ -149,10 +138,11 @@ export async function getStockSignal(symbol: string): Promise<SignalResult> {
   const { indicators, regime } = await getStockRegime(symbol);
   const signal = computeSignal(indicators, regime);
 
-  const [ohlcv, flowRows, soxRows] = await Promise.all([
+  const [ohlcv, flowRows, soxRows, calendar] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', 320),
     getStockHistory(symbol, 'investor_flow', 60),
     getStockHistory(symbol, 'benchmark_sox', 320),
+    getMarketCalendar(symbol),
   ]);
   const bars: Bar[] = ohlcv
     .map((r) => ({
@@ -188,12 +178,14 @@ export async function getStockSignal(symbol: string): Promise<SignalResult> {
   const { series } = computeSignalSeries(bars, flows, [sox]);
   const horizons: HorizonView[] = await Promise.all(
     HORIZONS.map(async (h) => {
-      const target = tradingDayAfter(asOf, h.calendar_days);
+      // 거래일을 센다 — 캘린더 날짜를 더하는 게 아니다. 휴장일이 끼면 달라진다.
+      const { date: target, beyondKnown } = nextTradingDay(asOf, h.trading_days, calendar);
       return {
         key: h.key,
         label: h.label,
         trading_days: h.trading_days,
         target_bucket: target,
+        beyond_known_calendar: beyondKnown,
         stale: target < today,
         backtest: computeSignalBacktest(series, bars, h.trading_days),
         live: await directionalStats(symbol, h.kind, true),

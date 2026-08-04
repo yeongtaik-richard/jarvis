@@ -1,4 +1,5 @@
 import { and, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { getMarketCalendar } from './market-calendar';
 import { db } from '@/db/client';
 import { collectorRuns, stockSnapshots, type CollectorRun } from '@/db/schema';
 import type { CollectorRunQuery, ReportCollectorRunInput } from './schemas';
@@ -93,11 +94,17 @@ const GRACE_MIN = 180;
  * 주의: KRX 공휴일을 모른다 — 평일 휴장일에는 `missed`가 참으로 뜰 수 있다.
  * 알림을 무시해야 하는 케이스라 대시보드 문구에도 그 가능성을 적어둔다.
  */
-export function lastExpectedCloseRun(now: Date): Date | null {
+/**
+ * @param closed 휴장인 평일 (YYYY-MM-DD). 넘기면 휴장일을 건너뛰어 `missed` 오탐을
+ *   막는다. 비워두면 주말만 거른다(예전 동작).
+ */
+export function lastExpectedCloseRun(now: Date, closed?: Set<string>): Date | null {
   for (let back = 0; back < 10; back++) {
     const shifted = new Date(now.getTime() + KST_OFFSET_MS - back * 86_400_000);
     const dow = shifted.getUTCDay(); // shifted의 UTC 필드 = KST 벽시계
     if (dow === 0 || dow === 6) continue;
+    // 휴장일엔 수집이 돌 이유가 없다 — 여기서 걸러야 배너가 뜨지 않는다
+    if (closed?.has(shifted.toISOString().slice(0, 10))) continue;
     const kstMidnight = Date.UTC(
       shifted.getUTCFullYear(),
       shifted.getUTCMonth(),
@@ -113,7 +120,7 @@ export type CollectorHealth = {
   last_run: ApiCollectorRun | null;
   last_ok_run: ApiCollectorRun | null;
   expected_close_run_at: string | null;
-  /** 기대 시각이 지났는데 그 이후 성공 실행이 없음 (공휴일 오탐 가능) */
+  /** 기대 시각이 지났는데 그 이후 성공 실행이 없음. 휴장일은 제외하고 센다. */
   missed: boolean;
   hours_since_ok: number | null;
   latest_snapshots: { metric: string; bucket_key: string; captured_at: string }[];
@@ -155,7 +162,8 @@ export async function getCollectorHealth(
     .where(eq(stockSnapshots.symbol, symbol))
     .orderBy(stockSnapshots.metric, desc(stockSnapshots.bucketKey));
 
-  const expected = lastExpectedCloseRun(now);
+  const calendar = await getMarketCalendar(symbol);
+  const expected = lastExpectedCloseRun(now, calendar.closed);
   const okAt = lastOk?.finishedAt ?? lastOk?.startedAt ?? null;
 
   return {

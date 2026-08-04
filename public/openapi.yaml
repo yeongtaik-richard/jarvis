@@ -29,7 +29,7 @@ info:
     그리고 방향은 결정론적 규칙 레인에서만 나온다 — AI 자유 텍스트는 규칙 신호를 인용할 수
     있을 뿐 스스로 방향을 지어내지 않으며, `validated_directional` claim_type은 거부(400)된다.
     적중률을 인용할 때는 표본 수와 기저율을 반드시 함께 말할 것.
-  version: '1.12.0'
+  version: '1.13.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -1210,10 +1210,17 @@ paths:
                         trading_days: { type: integer }
                         target_bucket:
                           type: string
-                          description: 채점될 거래일. 기준 봉(as_of)에서 잰다.
+                          description: |
+                            채점될 거래일. 기준 봉(as_of)에서 **거래일을 세어** 정한다 —
+                            캘린더 날짜를 더하는 게 아니다. 휴장일은 건너뛴다.
                         stale:
                           type: boolean
                           description: 대상 거래일이 이미 지났는가(기준 봉이 낡음). true면 기록하지 않는다.
+                        beyond_known_calendar:
+                          type: boolean
+                          description: |
+                            거래일 달력을 아는 범위를 넘어간 추정치인가. true면 대상일이 휴장일일
+                            수 있다 — 달력은 KIS 휴장일 조회로 약 4주 앞까지만 안다.
                         backtest:
                           type: object
                           properties:

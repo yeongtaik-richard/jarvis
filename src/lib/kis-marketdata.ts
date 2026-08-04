@@ -510,3 +510,62 @@ export async function foreignHolding(
     foreignQty: num(o.frgn_hldn_qty),
   };
 }
+
+// ── 국내 휴장일 달력 ────────────────────────────────────────────────────
+
+export interface BusinessDay {
+  date: string; // YYYY-MM-DD
+  /** 증시 개장일인가 (opnd_yn) — 이게 우리가 쓰는 값이다 */
+  openMarket: boolean;
+  /** 영업일인가 (bzdy_yn) — 은행 기준이라 증시와 다를 수 있다 (근로자의날 등) */
+  businessDay: boolean;
+}
+
+/**
+ * 국내 휴장일 조회 (CTCA0903R). 미래 날짜까지 준다 — 이게 핵심이다.
+ *
+ * 과거 휴장일은 저장된 일봉의 빈 평일로 정확히 역산되지만(백필이 KIS 연속 구간
+ * 조회라 "봉 없음 = 휴장"이 확실하다), **미래는 역산할 수 없다.** 5거래일 뒤가
+ * 언제인지 알려면 앞으로의 휴장일을 알아야 하고, 그래서 이 API가 필요하다.
+ *
+ * `opnd_yn`(개장 여부)만 쓴다. `bzdy_yn`(영업일)은 은행 기준이라 근로자의 날처럼
+ * 증시만 쉬는 날에 어긋난다.
+ */
+export async function domesticBusinessDays(
+  token: string,
+  creds: KisCreds,
+  fromYmd: string, // YYYYMMDD
+): Promise<BusinessDay[]> {
+  const out: BusinessDay[] = [];
+  let ctxArea = '';
+  let ctxKey = '';
+  // 한 번에 최대 약 한 달치라 연속조회로 채운다. 지평 계산엔 2주면 충분하지만
+  // 여유를 둔다 — 호출은 하루 한 번뿐이다.
+  for (let page = 0; page < 4; page++) {
+    const body = await kisGet<{
+      output?: Array<{ bass_dt?: string; opnd_yn?: string; bzdy_yn?: string }>;
+      ctx_area_fk?: string;
+      ctx_area_nk?: string;
+      tr_cont?: string;
+    }>(token, creds, '/uapi/domestic-stock/v1/quotations/chk-holiday', 'CTCA0903R', {
+      BASS_DT: fromYmd,
+      CTX_AREA_NK: ctxKey,
+      CTX_AREA_FK: ctxArea,
+    });
+    for (const r of body.output ?? []) {
+      const d = r.bass_dt;
+      if (!d || d.length !== 8) continue;
+      out.push({
+        date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`,
+        openMarket: r.opnd_yn === 'Y',
+        businessDay: r.bzdy_yn === 'Y',
+      });
+    }
+    ctxArea = body.ctx_area_fk?.trim() ?? '';
+    ctxKey = body.ctx_area_nk?.trim() ?? '';
+    if (!ctxKey) break;
+  }
+  // 같은 날짜가 페이지 경계에서 겹칠 수 있다
+  const seen = new Set<string>();
+  return out.filter((b) => (seen.has(b.date) ? false : (seen.add(b.date), true)));
+}

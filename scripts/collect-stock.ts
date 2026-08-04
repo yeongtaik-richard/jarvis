@@ -29,6 +29,7 @@ import {
   indexDailyRange,
   overseasIndexDaily,
   overseasIndexDailyRange,
+  domesticBusinessDays,
   overseasStockDaily,
   foreignHolding,
   investorFlows,
@@ -616,6 +617,34 @@ async function main(): Promise<void> {
     console.log(`[collect] foreign_holding ${today.dashed} (${fh.foreignRatio}%)`);
   } catch (e) {
     errors.push(`foreign_holding: ${String(e)}`);
+  }
+
+  // 3b) 거래일 달력. 미래 휴장일은 역산할 수 없어서 KIS에서 받아 저장한다 —
+  //     "5거래일 뒤"를 정확히 세려면 이게 있어야 한다 (market-calendar.ts 참고).
+  //     하루 한 번이면 충분하고 장중엔 바뀌지 않으므로 마감·프리마켓에서만.
+  if (!backfill && (kind === 'close' || kind === 'premarket')) {
+    try {
+      const days = await domesticBusinessDays(kisToken, creds, today.compact);
+      const closed = days.filter((d) => !d.openMarket).map((d) => d.date);
+      const covered = days.map((d) => d.date).sort();
+      if (covered.length > 0) {
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: 'market_calendar',
+          bucket_key: today.dashed,
+          trading_date_kst: today.dashed,
+          as_of_at: new Date().toISOString(),
+          collector_run_id: runId,
+          payload: { from: covered[0], to: covered[covered.length - 1], closed },
+        });
+        console.log(
+          `[collect] market_calendar ${covered[0]}~${covered[covered.length - 1]} (휴장 ${closed.length}일)`,
+        );
+      }
+    } catch (e) {
+      errors.push(`market_calendar: ${String(e)}`);
+    }
   }
 
   // 4) 공시·뉴스. 백필은 과거 데이터 적재라 이벤트를 다시 긁을 이유가 없다.

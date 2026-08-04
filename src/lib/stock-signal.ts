@@ -143,10 +143,14 @@ export function computeSignal(
  *
  * `kind`는 예측 레코드의 kind 값이다. 'directional'이 5거래일인 건 역사적 이유다
  * (이 레인이 먼저 있었고, 기존 행을 갈아엎지 않으려고 접미사를 붙이지 않았다).
+ *
+ * 대상일은 `market-calendar.ts`의 `nextTradingDay`로 **거래일을 세어** 정한다.
+ * 예전엔 캘린더 +1/+7일로 근사했는데, 휴장일이 끼면 백테스트(정확히 N거래일)와
+ * 다른 구간을 재게 된다. 2026-08-17(광복절 대체휴일)이 실제로 그 사례가 될 뻔했다.
  */
 export const HORIZONS = [
-  { key: 'd1', kind: 'directional_1d', label: '하루', trading_days: 1, calendar_days: 1 },
-  { key: 'd5', kind: 'directional', label: '일주일', trading_days: 5, calendar_days: 7 },
+  { key: 'd1', kind: 'directional_1d', label: '하루', trading_days: 1 },
+  { key: 'd5', kind: 'directional', label: '일주일', trading_days: 5 },
 ] as const;
 
 export type HorizonKey = (typeof HORIZONS)[number]['key'];
