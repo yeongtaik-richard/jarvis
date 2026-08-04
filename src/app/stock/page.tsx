@@ -528,6 +528,9 @@ export default async function StockDashboardPage() {
 
   const now = Date.now();
   const marketOpen = isMarketHoursKst(now);
+  // 실전 표본은 두 지평 레인의 합 — 카드 헤더는 "검증됐나"만 답하면 된다.
+  const liveScored = signalResult.horizons.reduce((a, h) => a + h.live.scored, 0);
+  const livePending = signalResult.horizons.reduce((a, h) => a + h.live.pending, 0);
   const cards = CARD_METRICS.map((m) => items.find((i) => i.metric === m)).filter(
     (i): i is ApiStockSnapshot => Boolean(i),
   );
@@ -654,7 +657,7 @@ export default async function StockDashboardPage() {
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="font-medium">
                 규칙 신호{' '}
-                <span className="text-xs font-normal text-zinc-400">주간 관점 · 5거래일 지평</span>
+                <span className="text-xs font-normal text-zinc-400">하루 · 일주일 두 지평</span>
               </h2>
               <span
                 className={`text-sm px-2.5 py-1 rounded font-medium ${SIGNAL_BADGE[signalResult.signal.signal]}`}
@@ -664,15 +667,13 @@ export default async function StockDashboardPage() {
               {/* 미검증 라벨은 신호명과 같은 시각 무게 — 떨어뜨리면 권고로 오독된다 */}
               <span className="text-sm px-2.5 py-1 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 tabular-nums">
                 미검증 ·{' '}
-                {signalResult.directional.scored > 0
-                  ? `적중 ${Math.round((signalResult.directional.hit_rate ?? 0) * 100)}% (표본 ${signalResult.directional.scored})`
-                  : '표본 없음'}
+                {liveScored > 0 ? `실전 표본 ${liveScored}건` : '실전 표본 없음'}
               </span>
             </div>
             <div className="text-xs text-zinc-500 dark:text-zinc-400 tabular-nums">
               score {signalResult.signal.score >= 0 ? '+' : ''}{signalResult.signal.score}/{signalResult.signal.max_score}
               {signalResult.signal.gated_by_volatility ? ' · 변동성 극단으로 관망 강등' : ''}
-              {signalResult.directional.pending > 0 ? ` · 채점 대기 ${signalResult.directional.pending}건` : ''}
+              {livePending > 0 ? ` · 채점 대기 ${livePending}건` : ''}
             </div>
             <ul className="text-xs text-zinc-600 dark:text-zinc-400 space-y-0.5 tabular-nums">
               {signalResult.signal.components.map((c) => (
@@ -680,11 +681,11 @@ export default async function StockDashboardPage() {
                   {c.value > 0 ? '▲' : c.value < 0 ? '▼' : '·'} {c.reason}
                 </li>
               ))}
-              {signalResult.target?.comparator && signalResult.reference_close !== null && (
+              {signalResult.signal.signal !== 'watch' && signalResult.reference_close !== null && (
                 <li className="text-zinc-400">
-                  검증 조건: {signalResult.target.bucket} 종가가 기준({signalResult.as_of} ·{' '}
-                  {won(signalResult.reference_close)})보다{' '}
-                  {signalResult.target.comparator === 'gt' ? '높은지' : '낮은지'} — 자동 채점됨
+                  검증 조건: 기준({signalResult.as_of} · {won(signalResult.reference_close)}) 대비{' '}
+                  {signalResult.signal.signal === 'buy' ? '높은지' : '낮은지'} —{' '}
+                  {signalResult.horizons.map((h) => `${h.label} ${h.target_bucket}`).join(' · ')} 자동 채점
                 </li>
               )}
             </ul>
@@ -718,22 +719,81 @@ export default async function StockDashboardPage() {
                 <ScoreSparkline points={signalResult.score_series} />
               </div>
             )}
-            <div className="text-xs text-zinc-500 dark:text-zinc-400 tabular-nums">
-              인샘플 백테스트({signalResult.backtest.horizon_days}거래일 지평): 상방{' '}
-              {signalResult.backtest.buy.n}회 적중{' '}
-              {signalResult.backtest.buy.hit_rate !== null
-                ? `${Math.round(signalResult.backtest.buy.hit_rate * 100)}%`
-                : '—'}{' '}
-              — 기저율(무작위 매수){' '}
-              {signalResult.backtest.baseline_up_rate !== null
-                ? `${Math.round(signalResult.backtest.baseline_up_rate * 100)}%`
-                : '—'}{' '}
-              · 하방 {signalResult.backtest.sell.n > 0
-                ? `${signalResult.backtest.sell.n}회 적중 ${Math.round((signalResult.backtest.sell.hit_rate ?? 0) * 100)}%`
-                : '표본 없음(최근 발생분 채점 전)'}
+            {/* 지평별 검증 — 규칙과 점수는 하나고, 다른 건 "언제 확인하느냐"뿐이다. */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs tabular-nums">
+                <thead className="text-zinc-500">
+                  <tr>
+                    <th className="text-left font-normal py-1">지평</th>
+                    <th className="text-right font-normal py-1">인샘플 적중</th>
+                    <th className="text-right font-normal py-1">기저율</th>
+                    <th className="text-right font-normal py-1">차이</th>
+                    <th className="text-right font-normal py-1">실전 표본</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {signalResult.horizons.map((h) => {
+                    const bt = h.backtest;
+                    const edge =
+                      bt.buy.hit_rate !== null && bt.baseline_up_rate !== null
+                        ? (bt.buy.hit_rate - bt.baseline_up_rate) * 100
+                        : null;
+                    return (
+                      <tr key={h.key} className="border-t border-zinc-100 dark:border-zinc-900">
+                        <td className="py-1.5">
+                          {h.label}
+                          <span className="text-zinc-400"> ({h.trading_days}거래일)</span>
+                          {h.stale && (
+                            <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                              기준 낡음
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-1.5 text-right">
+                          {bt.buy.hit_rate !== null
+                            ? `${Math.round(bt.buy.hit_rate * 100)}%`
+                            : '—'}
+                          <span className="text-zinc-400"> /{bt.buy.n}</span>
+                        </td>
+                        <td className="py-1.5 text-right text-zinc-500">
+                          {bt.baseline_up_rate !== null
+                            ? `${Math.round(bt.baseline_up_rate * 100)}%`
+                            : '—'}
+                        </td>
+                        {/* 차이가 이 표의 결론이다 — 적중률 단독은 상승장 착시다.
+                            색은 상태색(좋음/나쁨)이다. 빨강·파랑은 가격 방향 전용이라
+                            "규칙이 기저율보다 낫다"에 쓰면 상승으로 오독된다. */}
+                        <td
+                          className={`py-1.5 text-right font-medium ${
+                            edge === null
+                              ? ''
+                              : edge > 0
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : 'text-zinc-500'
+                          }`}
+                        >
+                          {edge === null ? '—' : `${edge > 0 ? '+' : ''}${edge.toFixed(1)}%p`}
+                        </td>
+                        <td className="py-1.5 text-right text-zinc-500">
+                          {h.live.scored > 0
+                            ? `${Math.round((h.live.hit_rate ?? 0) * 100)}% (${h.live.scored})`
+                            : h.live.pending > 0
+                              ? `대기 ${h.live.pending}`
+                              : '없음'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
+            <p className="text-[11px] text-zinc-400">
+              같은 규칙·같은 점수를 두 시점에 채점한다. <strong>차이</strong>가 결론이다 —
+              적중률만 보면 상승장 착시고, 기저율(무작위 매수)을 넘어선 만큼이 규칙의 몫이다.
+              하루 지평은 표본이 5배 빨리 쌓여 실전 검증이 먼저 끝난다.
+            </p>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 pt-1">
-              {signalResult.signal.disclaimer} {signalResult.backtest.note}
+              {signalResult.signal.disclaimer} {signalResult.horizons[0]?.backtest.note}
             </p>
           </section>
         )}

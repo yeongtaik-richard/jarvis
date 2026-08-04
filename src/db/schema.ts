@@ -227,7 +227,8 @@ export const stockPredictions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     analysisId: uuid('analysis_id').references(() => stockAnalysis.id),
     authoredBy: text('authored_by').notNull().default('claude-routine'),
-    kind: text('kind').notNull().default('watch'), // watch | directional
+    // watch | directional (5거래일) | directional_1d (1거래일)
+    kind: text('kind').notNull().default('watch'),
     claim: text('claim').notNull(),
     metric: text('metric').notNull(),
     field: text('field').notNull(),

@@ -23,7 +23,7 @@ info:
     /api/stock/*: 별도 기능 — SK하이닉스(000660) 매매 **참고정보** 애그리게이터.
     수집기가 저장한 수급·일봉·외국인보유 스냅샷을 읽고, 그 값에 근거한 브리핑을 남긴다.
     자동매매·수익예측이 아니다. 매수/매도/목표가/등급은 스키마에 없고, 검증되지 않은 방향성 주장은 API가 거부한다.
-  version: '1.9.0'
+  version: '1.10.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -1146,28 +1146,57 @@ paths:
                         score: { type: integer }
                         signal: { type: string, enum: [buy, sell, watch] }
                         gated: { type: boolean }
-                  backtest:
-                    type: object
+                  horizons:
+                    type: array
                     description: |
-                      **인샘플 백테스트 — 실전 성적이 아니다.** 인용할 때 반드시
-                      baseline_up_rate(기저율)와 note를 함께 전달할 것. 적중률은 기저율과의
-                      차이로만 의미가 있다 — 상승장에서는 무작위 매수도 60%가 나온다.
-                    properties:
-                      horizon_days: { type: integer }
-                      buy:
-                        type: object
-                        properties:
-                          n: { type: integer }
-                          hits: { type: integer }
-                          hit_rate: { type: [number, 'null'] }
-                      sell:
-                        type: object
-                        properties:
-                          n: { type: integer }
-                          hits: { type: integer }
-                          hit_rate: { type: [number, 'null'] }
-                      baseline_up_rate: { type: [number, 'null'] }
-                      note: { type: string }
+                      **하루·일주일 두 지평.** 규칙도 점수도 하나이고, 다른 것은 "언제
+                      확인하느냐"뿐이다. 각 지평은 인샘플 백테스트(backtest)와 실전
+                      성적(live)을 따로 갖는다.
+
+                      인용 규칙: backtest.buy.hit_rate는 **반드시**
+                      backtest.baseline_up_rate(무작위 매수의 상승률)와 나란히 전달할 것.
+                      둘의 차이가 규칙의 몫이고, 적중률 단독은 상승장 착시다. backtest는
+                      인샘플(임계값을 이 데이터를 보며 정함)이므로 실전 성적이 아니다 —
+                      live.scored가 쌓이기 전에는 "미검증"을 함께 말해야 한다.
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string, enum: [d1, d5] }
+                        label: { type: string }
+                        trading_days: { type: integer }
+                        target_bucket:
+                          type: string
+                          description: 채점될 거래일. 기준 봉(as_of)에서 잰다.
+                        stale:
+                          type: boolean
+                          description: 대상 거래일이 이미 지났는가(기준 봉이 낡음). true면 기록하지 않는다.
+                        backtest:
+                          type: object
+                          properties:
+                            horizon_days: { type: integer }
+                            buy:
+                              type: object
+                              properties:
+                                n: { type: integer }
+                                hits: { type: integer }
+                                hit_rate: { type: [number, 'null'] }
+                            sell:
+                              type: object
+                              properties:
+                                n: { type: integer }
+                                hits: { type: integer }
+                                hit_rate: { type: [number, 'null'] }
+                            baseline_up_rate: { type: [number, 'null'] }
+                            note: { type: string }
+                        live:
+                          type: object
+                          description: 실제로 기록·채점된 성적 (이 지평의 예측 레인)
+                          properties:
+                            pending: { type: integer }
+                            confirmed: { type: integer }
+                            refuted: { type: integer }
+                            scored: { type: integer }
+                            hit_rate: { type: [number, 'null'] }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/stock/decision:
