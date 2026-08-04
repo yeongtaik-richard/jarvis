@@ -23,6 +23,14 @@ import {
 
 export type SignalValue = 'buy' | 'sell' | 'watch';
 
+/** 화면에 영문 라벨이 새어 나가지 않게 — 'down'을 그대로 보여주면 안 된다. */
+const TREND_WORD: Record<string, string> = {
+  up: '상승 추세',
+  down: '하락 추세',
+  sideways: '횡보',
+  unknown: '판단 불가',
+};
+
 export interface SignalComponent {
   key: 'trend' | 'flow' | 'relative_sox';
   value: -1 | 0 | 1;
@@ -63,7 +71,7 @@ const RS_EXCESS_PCT = 5;
 // 화면의 "미검증 · 실전 표본" 배지와 지평 표가 이미 표본·기저율을 보여주므로,
 // 여기서는 그 둘이 못 하는 말만 한다 — 이건 규칙의 출력이지 매매 지시가 아니라는 것.
 export const SIGNAL_DISCLAIMER =
-  '규칙의 출력이지 매매 지시가 아니다. 임계값은 src/lib/stock-signal.ts에 전부 드러나 있다.';
+  '정해진 규칙이 계산한 값이다. 사라거나 팔라는 뜻이 아니다.';
 
 export function computeSignal(
   ind: Indicators | null,
@@ -79,8 +87,8 @@ export function computeSignal(
     value: regime.trend === 'up' ? 1 : regime.trend === 'down' ? -1 : 0,
     reason:
       regime.trend === 'unknown'
-        ? '추세 판단 불가(표본 부족)'
-        : `추세 ${regime.trend} (MA20 대비 ${ind.dist_ma20_pct ?? '?'}%)`,
+        ? '추세를 판단할 만큼 데이터가 없다'
+        : `${TREND_WORD[regime.trend] ?? regime.trend} — 20일 평균선 대비 ${ind.dist_ma20_pct ?? '?'}%`,
   });
 
   // 2) 수급 — 외국인 20일 누적과 연속 방향이 일치할 때만 방향.
@@ -89,8 +97,10 @@ export function computeSignal(
     value: regime.flow === 'foreign_buying' ? 1 : regime.flow === 'foreign_selling' ? -1 : 0,
     reason:
       regime.flow === 'mixed'
-        ? '수급 엇갈림(누적과 최근 방향 불일치)'
-        : `외국인 ${regime.flow === 'foreign_buying' ? '순매수' : regime.flow === 'foreign_selling' ? '순매도' : '판단 불가'} 지속 (연속 ${Math.abs(ind.foreign_streak_days)}일)`,
+        ? '외국인 수급이 엇갈린다 — 20일 누적 방향과 최근 며칠 방향이 다르다'
+        : regime.flow === 'unknown'
+          ? '수급을 판단할 만큼 데이터가 없다'
+          : `외국인이 ${Math.abs(ind.foreign_streak_days)}거래일 연속 ${regime.flow === 'foreign_buying' ? '사들이고' : '팔고'} 있다`,
   });
 
   // 3) 상대강도 — 종목이 안 들어간 벤치마크(SOX)만 쓴다. 오염 지수는 신호에 넣지 않는다.
@@ -102,8 +112,8 @@ export function computeSignal(
       rsExcess === null ? 0 : rsExcess > RS_EXCESS_PCT ? 1 : rsExcess < -RS_EXCESS_PCT ? -1 : 0,
     reason:
       rsExcess === null
-        ? 'SOX 대비 초과수익 계산 불가'
-        : `SOX 대비 20일 초과수익 ${rsExcess > 0 ? '+' : ''}${rsExcess}%p`,
+        ? '미국 반도체 지수와 비교할 데이터가 없다'
+        : `미국 반도체 지수(SOX)보다 20일간 ${rsExcess > 0 ? '더 올랐다' : '더 내렸다'} (차이 ${Math.abs(rsExcess)}%p)`,
   });
 
   const score = components.reduce((a, c) => a + c.value, 0);
@@ -225,7 +235,7 @@ export function computeSignalBacktest(
     buy,
     sell,
     baseline_up_rate: baseN > 0 ? Number((baseUp / baseN).toFixed(3)) : null,
-    note: '과거 데이터에 같은 규칙을 재적용한 인샘플 백테스트다. 실전 성적이 아니며, 수급 컴포넌트는 이력이 있는 최근 구간만 반영된다.',
+    note: '규칙을 만들 때 이미 본 과거 데이터로 채점한 값이라, 실제 성적보다 좋게 나온다.',
   };
 }
 

@@ -340,9 +340,18 @@ const HISTORY_DAYS = 30;
 
 const RUN_KIND_LABEL: Record<string, string> = {
   close: '마감',
-  premarket: '프리마켓',
-  backfill: '백필',
+  premarket: '장 시작 전',
+  intraday: '장중',
+  backfill: '과거 채우기',
   manual: '수동',
+  ondemand: '요청 실행',
+};
+/** 상태를 영문 그대로 보여주면 뭐가 문제인지 알 수 없다. */
+const RUN_STATUS_WORD: Record<string, string> = {
+  ok: '정상',
+  running: '진행 중',
+  partial: '일부 실패',
+  error: '실패',
 };
 const RUN_STATUS_BADGE: Record<string, string> = {
   ok: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
@@ -434,12 +443,12 @@ function ScoreSparkline({ points }: { points: SignalSeriesPoint[] }) {
   return (
     // 폭 상한이 없으면 svg가 viewBox 비율을 지키느라 데스크탑에서 320px로 쪼그라들어
     // 가운데 떠 보인다. 상한을 두고 h-auto로 비율대로 키운다.
-    <div className="viz max-w-[560px]">
+    <div className="viz max-w-140">
       <svg
         className="w-full h-auto"
         viewBox={`0 0 ${W} ${H}`}
         role="img"
-        aria-label={`규칙 점수 추이, 최근 ${points.length}거래일, 범위 -3에서 +3`}
+        aria-label={`규칙 점수 추이. 최근 ${points.length}거래일. 위로 갈수록 상방, 아래로 갈수록 하방.`}
       >
         <line x1={padX} x2={W - padX} y1={28} y2={28} stroke="var(--viz-axis)" strokeWidth="1" />
         <path d={line} fill="none" stroke="var(--viz-line)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
@@ -462,9 +471,9 @@ function ScoreSparkline({ points }: { points: SignalSeriesPoint[] }) {
 }
 
 const COMPONENT_LABEL: Record<string, string> = {
-  trend: '추세 (MA 배열)',
-  flow: '수급 (외국인)',
-  relative_sox: '상대강도 (SOX 대비)',
+  trend: '추세 (이동평균선)',
+  flow: '외국인 수급',
+  relative_sox: '미국 반도체 지수 대비',
 };
 const AXIS_LABEL: Record<string, string> = {
   trend: '추세',
@@ -493,11 +502,12 @@ const edgeClass = (pp: number | null): string =>
 
 function kstTime(iso: string | null): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    dateStyle: 'short',
-    timeStyle: 'short',
-  });
+  // ko-KR의 dateStyle:'short'는 "26. 8. 4. PM 2:51"처럼 나와 읽기 사납다.
+  const d = new Date(iso);
+  const f = (o: Intl.DateTimeFormatOptions) =>
+    d.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', ...o });
+  const md = f({ month: 'numeric', day: 'numeric' }).replace(/\.\s*/g, '/').replace(/\/$/, '');
+  return `${md} ${f({ hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
 /**
@@ -627,7 +637,8 @@ export default async function StockDashboardPage() {
           {/* "예측 아님"은 이제 거짓이다 — 규칙이 방향을 예측하고 자동 채점된다.
               여전히 사실인 것만 남긴다: 주문은 못 하고, 목표가·수익률·등급은 없다. */}
           <p className="text-xs text-zinc-500 mt-1">
-            규칙 방향 예측 + 자동 채점 · 주문 기능 없음 · 목표가·수익률 없음
+            규칙이 방향을 예측하고, 결과가 나오면 스스로 채점한다. 주문 기능은 없고 목표가도
+            내지 않는다.
           </p>
         </div>
 
@@ -644,7 +655,7 @@ export default async function StockDashboardPage() {
                   {hero.rate.toFixed(2)}%
                 </span>
               )}
-              <span className="text-xs text-zinc-400">{hero.label} · 전일比</span>
+              <span className="text-xs text-zinc-400">{hero.label} · 전일 대비</span>
               <Link
                 href="/stock/decisions"
                 className="ml-auto shrink-0 text-sm px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-900"
@@ -654,7 +665,7 @@ export default async function StockDashboardPage() {
             </div>
             {regimeResult.regime && (
               <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                {regimeResult.regime.label} · 기준 {regimeResult.indicators?.as_of}
+                {regimeResult.regime.label} · {regimeResult.indicators?.as_of} 마감 기준
               </div>
             )}
           </section>
@@ -678,7 +689,7 @@ export default async function StockDashboardPage() {
                   <span
                     className={`text-xs px-1.5 py-0.5 rounded ${RUN_STATUS_BADGE[health.last_run.status] ?? 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'}`}
                   >
-                    {health.last_run.status}
+                    {RUN_STATUS_WORD[health.last_run.status] ?? health.last_run.status}
                   </span>
                   {/* 무엇이 실패했는지 없이 배지만 띄우면 불안만 남는다. partial은 대개
                       부수 소스(뉴스·ADR) 실패라 핵심 지표와 무관하다. */}
@@ -707,7 +718,7 @@ export default async function StockDashboardPage() {
                 ? `${kstTime(health.last_ok_run.finished_at ?? health.last_ok_run.started_at)} (${Math.round(health.hours_since_ok ?? 0)}시간 전)`
                 : '없음'}
               {health.last_run?.error ? ` · ${health.last_run.error.slice(0, 160)}` : ''}
-              . 휴장일은 이미 제외하고 계산했으니, 이 경고는 실제 수집 실패입니다.
+. 휴장일은 계산에서 이미 뺐으니, 이 경고는 실제로 수집이 안 된 것입니다.
             </p>
           </div>
         )}
@@ -717,7 +728,7 @@ export default async function StockDashboardPage() {
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="font-medium">
                 규칙 신호{' '}
-                <span className="text-xs font-normal text-zinc-400">하루 · 일주일 두 지평</span>
+                <span className="text-xs font-normal text-zinc-400">하루 뒤 · 일주일 뒤를 본다</span>
               </h2>
               <span
                 className={`text-sm px-2.5 py-1 rounded font-medium ${SIGNAL_BADGE[signalResult.signal.signal]}`}
@@ -730,10 +741,22 @@ export default async function StockDashboardPage() {
                 {liveScored > 0 ? `실전 표본 ${liveScored}건` : '실전 표본 없음'}
               </span>
             </div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-400 tabular-nums">
-              score {signalResult.signal.score >= 0 ? '+' : ''}{signalResult.signal.score}/{signalResult.signal.max_score}
-              {signalResult.signal.gated_by_volatility ? ' · 변동성 극단으로 관망 강등' : ''}
-              {livePending > 0 ? ` · 채점 대기 ${livePending}건` : ''}
+            {/* "score -2/3"은 분수로 읽힌다. 지표 몇 개가 어느 쪽인지가 진짜 내용이고,
+                그게 리처드가 처음 물었던 "매수/매도 비율"이다. */}
+            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+              지표 {signalResult.signal.max_score}개 중{' '}
+              <span className={toneClass.pos}>
+                상방 {signalResult.signal.components.filter((c) => c.value > 0).length}
+              </span>{' '}
+              ·{' '}
+              <span className={toneClass.neg}>
+                하방 {signalResult.signal.components.filter((c) => c.value < 0).length}
+              </span>{' '}
+              · 중립 {signalResult.signal.components.filter((c) => c.value === 0).length}
+              {signalResult.signal.gated_by_volatility
+                ? ' — 변동성이 워낙 커서 관망으로 내렸다'
+                : ''}
+              {livePending > 0 ? ` · 채점 기다리는 것 ${livePending}건` : ''}
             </div>
             <ul className="text-xs text-zinc-600 dark:text-zinc-400 space-y-0.5 tabular-nums">
               {signalResult.signal.components.map((c) => (
@@ -774,109 +797,93 @@ export default async function StockDashboardPage() {
             {signalResult.score_series.length > 1 && (
               <div>
                 <div className="text-[11px] text-zinc-400 mb-1">
-                  규칙 점수 추이 (최근 {signalResult.score_series.length}거래일, -3~+3 · 점 = 신호 발생일)
+                  규칙 점수 추이 · 최근 {signalResult.score_series.length}거래일 (위로 갈수록 상방,
+                  가운데 선이 중립 · 점이 찍힌 날은 신호가 나온 날)
                 </div>
                 <ScoreSparkline points={signalResult.score_series} />
               </div>
             )}
-            {/* 지평별 검증 — 규칙과 점수는 하나고, 다른 건 "언제 확인하느냐"뿐이다. */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs tabular-nums">
-                <thead className="text-zinc-500">
-                  <tr>
-                    <th className="text-left font-normal py-1">지평</th>
-                    <th className="text-right font-normal py-1">인샘플 적중</th>
-                    <th className="text-right font-normal py-1">기저율</th>
-                    <th className="text-right font-normal py-1">차이</th>
-                    <th className="text-right font-normal py-1">실전 표본</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {signalResult.horizons.map((h) => {
-                    const bt = h.backtest;
-                    const edge =
-                      bt.buy.hit_rate !== null && bt.baseline_up_rate !== null
-                        ? (bt.buy.hit_rate - bt.baseline_up_rate) * 100
-                        : null;
-                    return (
-                      <tr key={h.key} className="border-t border-zinc-100 dark:border-zinc-900">
-                        <td className="py-1.5">
-                          {h.label}
-                          <span className="text-zinc-400"> ({h.trading_days}거래일)</span>
-                          {h.stale && (
-                            <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
-                              기준 낡음
-                            </span>
-                          )}
-                          {/* 달력을 아는 범위를 넘어가면 대상일이 휴장일일 수 있다 */}
-                          {h.beyond_known_calendar && (
-                            <span className="ml-1 text-[10px] px-1 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                              달력 범위 밖
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-1.5 text-right">
-                          {bt.buy.hit_rate !== null
-                            ? `${Math.round(bt.buy.hit_rate * 100)}%`
-                            : '—'}
-                          <span className="text-zinc-400"> /{bt.buy.n}</span>
-                        </td>
-                        <td className="py-1.5 text-right text-zinc-500">
-                          {bt.baseline_up_rate !== null
-                            ? `${Math.round(bt.baseline_up_rate * 100)}%`
-                            : '—'}
-                        </td>
-                        {/* 차이가 이 표의 결론이다 — 적중률 단독은 상승장 착시다.
-                            색은 상태색(좋음/나쁨)이다. 빨강·파랑은 가격 방향 전용이라
-                            "규칙이 기저율보다 낫다"에 쓰면 상승으로 오독된다. */}
-                        <td
-                          className={`py-1.5 text-right font-medium ${
-                            edge === null
-                              ? ''
-                              : edge > 0
-                                ? 'text-emerald-700 dark:text-emerald-400'
-                                : 'text-zinc-500'
-                          }`}
-                        >
-                          {edge === null ? '—' : `${edge > 0 ? '+' : ''}${edge.toFixed(1)}%p`}
-                        </td>
-                        <td className="py-1.5 text-right text-zinc-500">
-                          {h.live.scored > 0
-                            ? `${Math.round((h.live.hit_rate ?? 0) * 100)}% (${h.live.scored})`
-                            : h.live.pending > 0
-                              ? `대기 ${h.live.pending}`
-                              : '없음'}
-                          {/* 게이트에 막힌 날도 쌓는다 — 이 표본이 통과분보다 잘 맞으면
-                              게이트가 틀렸다는 실전 증거가 된다 */}
-                          {(h.blocked.scored > 0 || h.blocked.pending > 0) && (
-                            <span className="block text-[10px] text-zinc-400">
-                              차단분{' '}
-                              {h.blocked.scored > 0
-                                ? `${Math.round((h.blocked.hit_rate ?? 0) * 100)}% (${h.blocked.scored})`
-                                : `대기 ${h.blocked.pending}`}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            {/* 지평별 검증. 표로 두면 390px에서 헤더가 겹쳐 읽을 수 없었다("과거 재적아무
+                날이나 샀다" 처럼 뭉갠다). 줄이 둘뿐이라 표의 이점도 적어서 문장 블록으로 뒀다. */}
+            <div className="space-y-2">
+              {signalResult.horizons.map((h) => {
+                const bt = h.backtest;
+                const edge =
+                  bt.buy.hit_rate !== null && bt.baseline_up_rate !== null
+                    ? (bt.buy.hit_rate - bt.baseline_up_rate) * 100
+                    : null;
+                return (
+                  <div
+                    key={h.key}
+                    className="rounded border border-zinc-100 dark:border-zinc-900 p-2.5 text-xs"
+                  >
+                    <div className="font-medium">
+                      {h.label} 뒤에 채점
+                      <span className="font-normal text-zinc-400"> · {h.trading_days}거래일</span>
+                      {h.stale && (
+                        <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                          기준 낡음
+                        </span>
+                      )}
+                      {h.beyond_known_calendar && (
+                        <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                          휴장일 달력 범위 밖
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-zinc-600 dark:text-zinc-400">
+                      과거에 같은 규칙을 돌려보면{' '}
+                      <span className="font-medium tabular-nums text-zinc-800 dark:text-zinc-200">
+                        {bt.buy.hit_rate !== null ? `${Math.round(bt.buy.hit_rate * 100)}%` : '—'}
+                      </span>{' '}
+                      맞았다 ({bt.buy.n}번 중). 아무 날이나 샀으면{' '}
+                      <span className="tabular-nums">
+                        {bt.baseline_up_rate !== null
+                          ? `${Math.round(bt.baseline_up_rate * 100)}%`
+                          : '—'}
+                      </span>
+                      니까, 규칙이 보탠 건{' '}
+                      <span className={`font-medium tabular-nums ${edgeClass(edge)}`}>
+                        {edge === null ? '—' : `${edge > 0 ? '+' : ''}${edge.toFixed(1)}%p`}
+                      </span>
+                      .
+                    </div>
+                    <div className="mt-1 text-zinc-500">
+                      실제 성적:{' '}
+                      {h.live.scored > 0
+                        ? `${h.live.scored}건 중 ${Math.round((h.live.hit_rate ?? 0) * 100)}% 맞음`
+                        : h.live.pending > 0
+                          ? `아직 없음 (${h.live.pending}건 채점 대기)`
+                          : '아직 없음'}
+                      {(h.blocked.scored > 0 || h.blocked.pending > 0) && (
+                        <span className="text-zinc-400">
+                          {' · '}
+                          관망으로 막힌 것{' '}
+                          {h.blocked.scored > 0
+                            ? `${h.blocked.scored}건 중 ${Math.round((h.blocked.hit_rate ?? 0) * 100)}% 맞음`
+                            : `${h.blocked.pending}건 대기`}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
+
             {/* 국면·컴포넌트 분해 — 규칙 개선의 작업대. 기본은 접어둔다. */}
             <details>
               <summary className="cursor-pointer select-none text-xs text-zinc-500 py-2">
-                어떤 장에서 무엇이 먹혔나 (국면·컴포넌트 분해)
+                어떤 장에서 무엇이 잘 맞았나
               </summary>
               <div className="mt-1 space-y-3">
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs tabular-nums">
                     <thead className="text-zinc-500">
                       <tr>
-                        <th className="text-left font-normal py-1">컴포넌트</th>
-                        <th className="text-right font-normal py-1">n</th>
-                        <th className="text-right font-normal py-1">적중</th>
-                        <th className="text-right font-normal py-1">기저율</th>
+                        <th className="text-left font-normal py-1">지표</th>
+                        <th className="text-right font-normal py-1">표본</th>
+                        <th className="text-right font-normal py-1">맞음</th>
+                        <th className="text-right font-normal py-1">무작위</th>
                         <th className="text-right font-normal py-1">차이</th>
                       </tr>
                     </thead>
@@ -901,10 +908,10 @@ export default async function StockDashboardPage() {
                   <table className="w-full text-xs tabular-nums">
                     <thead className="text-zinc-500">
                       <tr>
-                        <th className="text-left font-normal py-1">국면</th>
-                        <th className="text-right font-normal py-1">n</th>
-                        <th className="text-right font-normal py-1">적중</th>
-                        <th className="text-right font-normal py-1">기저율</th>
+                        <th className="text-left font-normal py-1">어떤 장에서</th>
+                        <th className="text-right font-normal py-1">표본</th>
+                        <th className="text-right font-normal py-1">맞음</th>
+                        <th className="text-right font-normal py-1">무작위</th>
                         <th className="text-right font-normal py-1">차이</th>
                       </tr>
                     </thead>
@@ -933,29 +940,40 @@ export default async function StockDashboardPage() {
                     </tbody>
                   </table>
                 </div>
-                <p className="text-[11px] text-zinc-400">
+                <ul className="text-[11px] text-zinc-400 space-y-1">
+                  <li>· 닷새 뒤 종가로 채점했고, 관망으로 걸러진 날까지 포함해서 셌다.</li>
+                  <li>
+                    · <strong>외국인 수급 줄은 믿지 말 것.</strong> 수급 데이터가 30거래일
+                    분량뿐이라 표본 열다섯 개가 급락 한 구간에 몰려 있다. 사건 하나를 열다섯 번
+                    센 것에 가깝다.
+                  </li>
+                  <li>
+                    · 표본이 100건을 넘는 줄만 단서로 볼 만하다. 그렇다고 이 표를 보고 바로
+                    규칙을 고치면 과거에 맞춰 깎는 셈이니, 실제 성적이 쌓인 뒤에 고치는 게 순서다.
+                  </li>
                   {(() => {
                     const dropped = signalResult.breakdown.regimes.filter(
                       (r) => r.n < REGIME_MIN_N || r.value === 'unknown',
                     ).length;
-                    return dropped > 0
-                      ? `표본 ${REGIME_MIN_N}건 미만이거나 지표 이력이 없는 슬라이스 ${dropped}개는 뺐다. `
-                      : '';
+                    return dropped > 0 ? (
+                      <li>· 표본이 {REGIME_MIN_N}건도 안 되는 {dropped}줄은 뺐다.</li>
+                    ) : null;
                   })()}
-                  5거래일 지평 · <strong>게이트를 무시한 원시 방향</strong> 기준이다(막힌 날을
-                  빼면 게이트를 평가할 수 없다). 인샘플이고, n이 작은 줄과 수급 관련 줄은 특히
-                  못 믿는다 — 수급 이력이 30거래일뿐이라 표본이 한 구간에 몰려 있고, 5일 창이
-                  서로 겹쳐 실질 독립 표본은 n보다 훨씬 적다. 규칙 개선의 출발점이지 결론이 아니다.
-                </p>
+                </ul>
               </div>
             </details>
-            <p className="text-[11px] text-zinc-400">
-              같은 규칙·같은 점수를 두 시점에 채점한다. <strong>차이</strong>가 결론이다 —
-              적중률만 보면 상승장 착시고, 기저율(무작위 매수)을 넘어선 만큼이 규칙의 몫이다.
-              두 지평 모두 매 거래일 1건씩 쌓이고, 다른 건 채점이 끝나는 시점이다(다음날 vs
-              5거래일 뒤). 일주일 지평은 창이 서로 겹쳐서 표본 n개가 독립 n개가 아니다.{' '}
-              {signalResult.horizons[0]?.backtest.note}
-            </p>
+            {/* 한 문단에 개념 다섯 개를 넣으면 아무도 안 읽는다. 한 줄에 하나씩. */}
+            <ul className="text-[11px] text-zinc-400 space-y-1">
+              <li>
+                · <strong>"규칙이 보탠 것"</strong>만 보면 된다. 맞은 비율이 높아도 그냥 오르는
+                장이었을 수 있어서, 아무 날이나 샀을 때보다 얼마나 나은지가 규칙의 실력이다.
+              </li>
+              <li>· 규칙은 하나다. 언제 채점하느냐만 다르다.</li>
+              <li>
+                · "과거에 돌려보면"은 {signalResult.horizons[0]?.backtest.note} 믿을 숫자는 각
+                칸의 "실제 성적"이고, 그건 지금부터 매 거래일 쌓인다.
+              </li>
+            </ul>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 pt-1">
               {signalResult.signal.disclaimer}
             </p>
@@ -988,7 +1006,9 @@ export default async function StockDashboardPage() {
               >
                 {VOL_TEXT[regimeResult.regime.volatility]}
                 {regimeResult.indicators.vol20_percentile !== null
-                  ? ` ${regimeResult.indicators.vol20_percentile}%ile`
+                  ? regimeResult.indicators.vol20_percentile >= 99
+                    ? ' (이력 중 최고)'
+                    : ` (상위 ${100 - regimeResult.indicators.vol20_percentile}%)`
                   : ''}
               </span>
               <span
@@ -1241,8 +1261,8 @@ export default async function StockDashboardPage() {
               ))}
             </div>
             <p className="text-[11px] text-zinc-400">
-              브리핑의 "지켜볼 것"을 기계가 채점한 기록이다. 등록 시점에 결과가 이미 있으면
-              접수 자체가 거부된다(사후 예측 방지).
+              브리핑이 "지켜볼 것"으로 적은 항목을 기계가 채점한 기록이다. 결과가 이미 나온
+              뒤에는 등록 자체가 거부된다 — 알고 나서 쓴 예측을 막으려는 것이다.
             </p>
           </section>
         )}
@@ -1286,15 +1306,16 @@ export default async function StockDashboardPage() {
               ))}
             </div>
             <p className="text-[11px] text-zinc-400">
-              사건의 존재와 시각만 모아둔 것이다. 호재·악재 판정이나 인과 해석은 하지 않는다.
-              공시는 DART가 날짜만 제공해 09:00로 표기된다.
+              무슨 일이 언제 있었는지만 모아둔 것이다. 호재냐 악재냐는 판정하지 않고, 주가가
+              그 때문에 움직였다고도 말하지 않는다. 공시는 DART가 날짜만 주기 때문에 시각을
+              09:00으로 적어둔 것이다.
             </p>
           </section>
         )}
 
         <p className="text-[11px] text-zinc-400 pt-2">
-          수급은 KIS 투자자별 매매대금(백만원→조/억 환산). 순매수 = 매수 − 매도.
-          일별 마감 후 수집. 부호 색은 국내 관례(빨강=순매수·상승, 파랑=순매도·하락).
+          수급은 KIS의 투자자별 매매대금이다. 순매수는 매수에서 매도를 뺀 값이고, 마감 후
+          하루 한 번 모은다. 빨강이 상승·순매수, 파랑이 하락·순매도다(국내 관례).
         </p>
       </main>
     </div>

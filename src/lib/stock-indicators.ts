@@ -84,6 +84,27 @@ const TREND_FLAT_PCT = 3;
 const VOL_CALM = 25;
 const VOL_ELEVATED = 75;
 const VOL_EXTREME = 90;
+/**
+ * 백분위를 사람 말로. "100%ile"은 읽는 사람이 해석해야 하는 표기다 —
+ * 화면에 숫자만 던지면 그게 높은 건지 낮은 건지조차 한 번 더 생각해야 한다.
+ */
+function percentileWord(p: number | null, days: number): string {
+  if (p === null) return '비교할 이력이 부족하다';
+  if (p >= 99) return `가진 ${days}거래일 중 가장 높다`;
+  if (p >= 90) return `가진 ${days}거래일 중 상위 ${100 - p}%`;
+  if (p <= 10) return `가진 ${days}거래일 중 하위 ${p}%`;
+  return `가진 ${days}거래일의 중간쯤(상위 ${100 - p}%)`;
+}
+
+/** 연속일 서술. 1일을 '1거래일 연속'이라 쓰면 어색하다. */
+function streakWord(streak: number): string {
+  const n = Math.abs(streak);
+  const dir = streak < 0 ? '순매도' : '순매수';
+  if (n === 0) return '최근 방향은 일정하지 않다';
+  if (n === 1) return `직전 거래일은 ${dir}`;
+  return `최근 ${n}거래일 내리 ${dir}`;
+}
+
 /** 수급 방향을 '연속'으로 부르기 위한 최소 거래일. */
 const FLOW_STREAK_MIN = 2;
 
@@ -405,10 +426,13 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
     else if (ind.dist_ma20_pct > 0 && stacked > 0) trend = 'up';
     else if (ind.dist_ma20_pct < 0 && stacked < 0) trend = 'down';
     else trend = 'sideways'; // 가격 방향과 MA 배열이 어긋남 → 단정하지 않는다
+    // 'MA20 < MA60' 같은 수식은 화면에서 한 번 더 해석해야 한다
     reasons.push(
-      `종가가 MA20 대비 ${ind.dist_ma20_pct > 0 ? '+' : ''}${ind.dist_ma20_pct}%, MA20 ${
-        stacked > 0 ? '>' : stacked < 0 ? '<' : '='
-      } MA60`,
+      `종가가 20일 평균선보다 ${Math.abs(ind.dist_ma20_pct)}% ${
+        ind.dist_ma20_pct > 0 ? '높다' : '낮다'
+      } · 20일 평균선은 60일 평균선 ${
+        stacked > 0 ? '위에 있다' : stacked < 0 ? '아래에 있다' : '과 붙어 있다'
+      }`,
     );
   } else {
     reasons.push(`이력 ${ind.trading_days}거래일 — MA20/MA60을 채우지 못했다`);
@@ -425,7 +449,7 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
             ? 'calm'
             : 'normal';
     reasons.push(
-      `20일 실현변동성 ${ind.vol20_pct}% (보유 이력 ${ind.vol20_percentile}%ile)`,
+      `20일 변동성 ${ind.vol20_pct}% — ${percentileWord(ind.vol20_percentile, ind.trading_days)}`,
     );
   }
 
@@ -438,15 +462,15 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
     else flow = 'mixed';
     const tril = (v: number) => `${(v / 1_000_000).toFixed(2)}조`;
     reasons.push(
-      `외국인 20일 누적 ${ind.foreign_net_20d < 0 ? '순매도' : '순매수'} ${tril(
-        Math.abs(ind.foreign_net_20d),
-      )}, 최근 ${Math.abs(streak)}거래일 연속 ${streak < 0 ? '순매도' : '순매수'}`,
+      `외국인이 20일 동안 ${tril(Math.abs(ind.foreign_net_20d))} ${
+        ind.foreign_net_20d < 0 ? '팔았다' : '샀다'
+      } · ${streakWord(streak)}`,
     );
     if (ind.institution_net_20d !== null) {
       reasons.push(
-        `기관 20일 누적 ${ind.institution_net_20d < 0 ? '순매도' : '순매수'} ${tril(
-          Math.abs(ind.institution_net_20d),
-        )}`,
+        `기관은 20일 동안 ${tril(Math.abs(ind.institution_net_20d))} ${
+          ind.institution_net_20d < 0 ? '팔았다' : '샀다'
+        }`,
       );
     }
   }
@@ -471,7 +495,9 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
     if (r.contains_stock && r.index_on_stock_r2 !== null) {
       // 순환 비교라는 사실을 숫자와 함께 붙인다. 이 문구 없이 인용되면 오독된다.
       reasons.push(
-        `${base} — 단, 이 지수는 종목을 포함한다(지수를 종목으로 회귀: 계수 ${r.index_on_stock_beta}, R² ${r.index_on_stock_r2}) → 초과수익이 축소 편향`,
+        `${base} — 단, 이 지수 안에 이 종목이 들어 있다. 지수 움직임의 ${Math.round(
+          (r.index_on_stock_r2 ?? 0) * 100,
+        )}%가 이 종목으로 설명되니, 비교 대상이라기보다 거울에 가깝다(차이가 실제보다 작게 나온다)`,
       );
     } else {
       reasons.push(base);
@@ -480,7 +506,15 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
 
   const parts = [TREND_LABEL[trend]];
   if (volatility !== 'unknown') {
-    parts.push(`${VOL_LABEL[volatility]}(${ind.vol20_percentile}%ile)`);
+    // "100%ile"은 읽는 사람이 한 번 더 해석해야 하는 표기다
+    const pctl = ind.vol20_percentile;
+    parts.push(
+      pctl === null
+        ? VOL_LABEL[volatility]!
+        : pctl >= 99
+          ? `${VOL_LABEL[volatility]}(이력 중 최고)`
+          : `${VOL_LABEL[volatility]}(상위 ${100 - pctl}%)`,
+    );
   }
   if (flow === 'foreign_selling' || flow === 'foreign_buying') {
     parts.push(
@@ -497,7 +531,7 @@ export function classifyRegime(ind: Indicators | null): Regime | null {
     label: parts.join(' · '),
     reasons,
     disclaimer:
-      '국면 라벨은 과거 데이터의 서술이다 — 그 자체로 앞날을 뜻하진 않는다. 방향 예측은 규칙 신호가 따로 내고, 기록·채점된다.',
+      '지금까지 어땠는지를 정리한 것이다. 앞날의 방향은 위의 규칙 신호가 따로 내고, 그건 기록되고 채점된다.',
   };
 }
 
