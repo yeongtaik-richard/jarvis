@@ -199,7 +199,9 @@ function metricRows(item: ApiStockSnapshot): Row[] {
       { label: '저가', value: num('low') === null ? '—' : won(num('low')!) },
       { label: '누적 거래량', value: vol === null ? '—' : korQty(vol, '주') },
       { label: '누적 거래대금', value: amount === null ? '—' : moneyKrw(amount) },
-      flowQtyRow('외국인 순매수(주)', num('foreign_net_qty')),
+      // 외국인 줄은 뺐다 — KIS frgn_ntby_qty를 "장중 외국인 순매수"로 표시했는데
+      // 실제로는 보유수량 일별 변화라 장중 내내 고정이고 자릿수도 실제 순매수와 다르다.
+      // 보유수량 자체는 아래 '외국인 보유' 카드가 보여준다.
       flowQtyRow('프로그램 순매수(주)', num('program_net_qty')),
       { label: '공매도 체결', value: num('short_qty') === null ? '—' : korQty(num('short_qty')!, '주') },
       {
@@ -653,7 +655,7 @@ export default async function StockDashboardPage() {
             high: num('high'),
             low: num('low'),
             programNetQty: num('program_net_qty'),
-            foreignNetQty: num('foreign_net_qty'),
+            foreignHoldingDeltaQty: num('foreign_holding_delta_qty') ?? num('foreign_net_qty'),
           };
         })
         .filter((b) => Number.isFinite(b.price))

@@ -26,7 +26,8 @@ export interface IntradayBucket {
   high: number | null;
   low: number | null;
   programNetQty: number | null;
-  foreignNetQty: number | null;
+  /** KIS frgn_ntby_qty — 보유수량 일별 변화다. 장중 수급이 아니라 근거로 쓰지 않는다. */
+  foreignHoldingDeltaQty: number | null;
 }
 
 export interface ReadFactor {
@@ -64,8 +65,9 @@ const tril = (v: number) => `${(Math.abs(v) / 1_000_000).toFixed(2)}조`;
 
 /**
  * 여러 버킷에서 값이 한 번도 안 변했으면 갱신되지 않는 필드로 본다.
- * 2026-08-04·08-05 연속으로 `foreign_net_qty`가 그랬다 — 실시간 누적치가 몇 시간째
- * 같을 수는 없다. 이런 값을 근거에 넣으면 없는 신호를 지어내는 셈이다.
+ * 실시간 누적치가 몇 시간째 같을 수는 없다. 이런 값을 근거에 넣으면 없는 신호를
+ * 지어내는 셈이다. (KIS의 외국인 필드가 굳어 보였던 건 이 경우가 아니라 애초에
+ * 장중 값이 아니어서였다 — kis-marketdata.ts `foreignHoldingDeltaQty` 참고.)
  */
 function isFrozen(values: Array<number | null>): boolean {
   const seen = values.filter((v): v is number => v !== null);
@@ -123,9 +125,8 @@ export function computeIntradayRead(
   } else if (progFrozen) {
     caveats.push('프로그램 수급 값이 갱신되지 않아 근거에서 뺐다');
   }
-  if (isFrozen(buckets.map((b) => b.foreignNetQty))) {
-    caveats.push('장중 외국인 수량이 갱신되지 않아 근거에서 뺐다');
-  }
+  // KIS의 외국인 필드는 장중 수급이 아니라 보유수량 일별 변화라 애초에 재료가 아니다.
+  // 아래 '어제 확정 수급'이 외국인 방향을 대신 담당한다.
 
   // 4) 전일 확정 수급 — 오늘 장중 수급은 못 믿을 때가 있어서, 확정된 어제 방향을 같이 본다
   if (prevFlowSum !== null && Number.isFinite(prevFlowSum)) {

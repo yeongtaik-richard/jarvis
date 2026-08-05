@@ -321,7 +321,10 @@ async function main(): Promise<void> {
             foreign_ratio: q.foreignRatio,
             foreign_qty: q.foreignQty,
             // 수급의 '질' — 누가 사는지
-            foreign_net_qty: q.foreignNetQty,
+            // 이름 주의: KIS frgn_ntby_qty는 장중 순매수가 아니라 보유수량 일별 변화다
+            // (kis-marketdata.ts foreignHoldingDeltaQty 주석 참고). 옛 이름
+            // foreign_net_qty로 저장된 행이 08-05 이전에 남아 있다.
+            foreign_holding_delta_qty: q.foreignHoldingDeltaQty,
             program_net_qty: q.programNetQty,
             short_qty: q.shortQty,
             loan_balance_rate: q.loanBalanceRate,

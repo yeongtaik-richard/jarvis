@@ -403,7 +403,14 @@ export interface Quote {
   foreignRatio: number;
   foreignQty: number;
   // 수급의 '질' — 누가 사는지
-  foreignNetQty: number; // 외국인 순매수 수량
+  /**
+   * KIS `frgn_ntby_qty`. 이름은 "외국인 순매수 수량"이지만 **장중 매매 순매수가 아니다.**
+   * 2026-08-05 확인: 거래량이 89만→193만 주로 느는 동안 값이 -2,208로 고정이었고,
+   * 그 -2,208은 `frgn_hldn_qty`(외국인 보유수량)의 전일 대비 변화와 정확히 같았다
+   * (07-31의 -32,544도 일치). 즉 **보유수량 일별 변화**이고 하루 한 번만 갱신된다.
+   * 장중 수급 근거로 쓰면 안 된다 — 그러라고 있는 값이 아니다.
+   */
+  foreignHoldingDeltaQty: number;
   programNetQty: number; // 프로그램 순매수 수량
   shortQty: number; // 최종 공매도 체결량
   loanBalanceRate: number; // 대차잔고 비율 %
@@ -459,7 +466,7 @@ export async function currentQuote(
     amountKrw: num(o.acml_tr_pbmn),
     foreignRatio: num(o.hts_frgn_ehrt),
     foreignQty: num(o.frgn_hldn_qty),
-    foreignNetQty: num(o.frgn_ntby_qty),
+    foreignHoldingDeltaQty: num(o.frgn_ntby_qty),
     programNetQty: num(o.pgtr_ntby_qty),
     shortQty: num(o.last_ssts_cntg_qty),
     loanBalanceRate: num(o.whol_loan_rmnd_rate),
