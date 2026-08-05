@@ -698,12 +698,20 @@ export default async function StockDashboardPage() {
                 </span>
               )}
               <span className="text-xs text-zinc-400">{hero.label} · 전일 대비</span>
-              <Link
-                href="/stock/decisions"
-                className="ml-auto shrink-0 text-sm px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-900"
-              >
-                결정 기록
-              </Link>
+              <span className="ml-auto shrink-0 flex gap-2">
+                <Link
+                  href="/stock/horizons"
+                  className="text-sm px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                >
+                  지평 보드
+                </Link>
+                <Link
+                  href="/stock/decisions"
+                  className="text-sm px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                >
+                  결정 기록
+                </Link>
+              </span>
             </div>
             {/* 국면 줄은 뺐다 — 기준일이 달라(어제 마감) 현재가와 한 카드에 있으면
                 "오늘 +7%인데 하락 추세"처럼 모순으로 읽힌다. 국면은 자기 카드가 따로 있다. */}

@@ -1,0 +1,104 @@
+/**
+ * 지평 보드 조립 — 선언(horizon-board.ts)에 실제 데이터를 채운다.
+ *
+ * 채우지 못하는 칸은 **채우지 않는다.** 보드의 값어치는 "무엇을 아직 말할 수 없는지"가
+ * 한눈에 보이는 데 있고, 빈칸을 그럴듯한 숫자로 메우면 그 값어치가 사라진다.
+ */
+
+import { and, desc, eq } from 'drizzle-orm';
+import { db } from '@/db/client';
+import { stockSnapshots } from '@/db/schema';
+import { HORIZON_BOARD, tradingDaysTo30Samples, type HorizonSpec } from './horizon-board';
+import { getPredictionLedger, type RunningRecord } from './prediction-ledger';
+import { computeStockPosition, type QuarterPoint, type StockPosition } from './stock-position';
+import { getStockHistory } from './stock-service';
+import { getStockSignal } from './stock-signal-service';
+
+export interface HorizonRow extends HorizonSpec {
+  /** 지금 이 지평이 가리키는 방향 (live일 때만) */
+  direction: 'up' | 'down' | null;
+  /** 채점 대상 거래일 */
+  target: string | null;
+  /** 실전 성적 */
+  record: RunningRecord | null;
+  /** 30표본까지 남은 거래일 (대략) */
+  daysTo30: number;
+  /** position_only 지평이 보여줄 것 */
+  position: StockPosition | null;
+}
+
+export interface HorizonBoard {
+  rows: HorizonRow[];
+  /** 분봉이 며칠치 쌓였나 — 짧은 지평의 진행 상황 */
+  minuteDays: number;
+  asOf: string | null;
+}
+
+const n = (p: unknown, k: string): number | null => {
+  const v = Number((p as Record<string, unknown> | null)?.[k]);
+  return Number.isFinite(v) ? v : null;
+};
+
+export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
+  const [signal, ledger, bars, fin, val, minuteRows] = await Promise.all([
+    getStockSignal(symbol),
+    getPredictionLedger(symbol, { settledLimit: 200 }),
+    getStockHistory(symbol, 'daily_ohlcv', 320),
+    getStockHistory(symbol, 'quarter_financials', 1),
+    getStockHistory(symbol, 'valuation', 1),
+    db
+      .select({ bucketKey: stockSnapshots.bucketKey })
+      .from(stockSnapshots)
+      .where(and(eq(stockSnapshots.symbol, symbol), eq(stockSnapshots.metric, 'minute_bars')))
+      .orderBy(desc(stockSnapshots.bucketKey))
+      .limit(400),
+  ]);
+
+  const closes = bars.map((b) => n(b.payload, 'close')!).filter(Number.isFinite);
+  const quarters = (((fin[0]?.payload as Record<string, unknown>)?.quarters ?? []) as QuarterPoint[]);
+  const position = computeStockPosition(closes, quarters, val[0] ? n(val[0].payload, 'per') : null);
+  const minuteDays = new Set(minuteRows.map((r) => r.bucketKey.slice(0, 10))).size;
+
+  // 레인별 실전 성적. 장부는 kind로 갈라져 있다.
+  const recordFor = (kind: string): RunningRecord | null => {
+    const es = [...ledger.settled, ...ledger.due, ...ledger.open].filter(
+      (e) => e.passed && KIND_OF[e.horizon] === kind,
+    );
+    const scored = es.filter((e) => e.status === 'confirmed' || e.status === 'refuted');
+    if (es.length === 0) return null;
+    const hits = scored.filter((e) => e.status === 'confirmed').length;
+    return {
+      scored: scored.length,
+      hits,
+      hit_rate: scored.length ? Number((hits / scored.length).toFixed(3)) : null,
+      streak: 0,
+    };
+  };
+
+  const rows: HorizonRow[] = HORIZON_BOARD.map((spec) => {
+    // HorizonView는 key('d1'/'d5')로 식별한다. spec.kind는 예측 레코드의 kind라 축이 다르다.
+    const viewKey = Object.entries(KIND_OF).find(([, k]) => k === spec.kind)?.[0];
+    const hz = signal.horizons.find((h) => h.key === viewKey);
+    return {
+      ...spec,
+      direction:
+        spec.status === 'live' && signal.signal && signal.signal.raw_direction
+          ? signal.signal.raw_direction === 'buy'
+            ? 'up'
+            : 'down'
+          : null,
+      target: hz?.target_bucket ?? null,
+      record: spec.kind ? recordFor(spec.kind) : null,
+      daysTo30: tradingDaysTo30Samples(spec.tradingDays),
+      position: spec.status === 'position_only' ? position : null,
+    };
+  });
+
+  return { rows, minuteDays, asOf: signal.as_of };
+}
+
+/** 장부 항목의 horizon 키 → 예측 kind. HORIZONS와 짝이 맞아야 한다. */
+const KIND_OF: Record<string, string> = {
+  d1: 'directional_1d',
+  d5: 'directional',
+};

@@ -49,6 +49,11 @@ export interface StockPosition {
   /** 한 줄 요약 — 방향이 아니라 위치 서술이다 */
   headline: string;
   caveats: string[];
+  /**
+   * 지평별로 **다른 면**을 보여주기 위한 것. 같은 PBR·ROE 문장을 2달·6달·1년 칸에
+   * 세 번 쓰면 그건 정보가 아니라 소음이다. 지평이 길수록 느리게 움직이는 지표를 준다.
+   */
+  facets: Record<string, { short: string; long: string }>;
 }
 
 const pctile = (values: number[], v: number): number =>
@@ -143,5 +148,29 @@ export function computeStockPosition(
     .filter(Boolean)
     .join(' · ');
 
-  return { bands, earnings, headline, caveats };
+  const pbrTxt = pbr
+    ? `PBR ${pbr.current}배 · 하위 ${pbr.percentile}%`
+    : 'PBR 밴드 계산 불가';
+  const drawdown = ((last / Math.max(...closes) - 1) * 100).toFixed(1);
+  const facets: StockPosition['facets'] = {
+    // 2달 — 다음 분기 실적이 지배하는 구간
+    m2: {
+      short: earnings.reading,
+      long: `다음 분기 실적이 지배하는 구간이다. ${earnings.reading} (최근 ROE ${latest.roe}%, 영업이익 증가율 ${latest.operatingProfitGrowthPct}%). 실적 방향이 바뀌면 이 칸이 먼저 바뀐다.`,
+    },
+    // 6달 — 밸류에이션이 지배
+    m6: {
+      short: pbrTxt,
+      long: pbr
+        ? `${pbrTxt} — ${pbr.reading}. 우리가 가진 ${pbr.sampleDays}거래일 안에서 잰 것이라 "역사적 저평가"라고는 말할 수 없다. 밴드 ${pbr.low}~${pbr.high}배.`
+        : 'BPS 이력이 부족해 밴드를 못 만든다.',
+    },
+    // 1년 — 사이클 위치
+    y1: {
+      short: `고점 대비 ${drawdown}%`,
+      long: `이력 고점 대비 ${drawdown}%. ROE는 ${latest.roe}%로 ${quarters.filter((q) => q.roe < latest.roe).length}/${quarters.length}분기보다 높다. 1년 지평은 메모리 사이클이 지배하는데 그 재료(현물가·설비투자)는 아직 안 모은다.`,
+    },
+  };
+
+  return { bands, earnings, headline, caveats, facets };
 }

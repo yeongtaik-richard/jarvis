@@ -31,6 +31,8 @@ import {
   overseasIndexDailyRange,
   domesticBusinessDays,
   quarterFinancials,
+  minuteBars,
+  MINUTE_WINDOWS,
   overseasStockDaily,
   foreignHolding,
   investorFlows,
@@ -683,6 +685,53 @@ async function main(): Promise<void> {
       }
     } catch (e) {
       errors.push(`market_calendar: ${String(e)}`);
+    }
+  }
+
+  // 3b-2) 분봉. 10분·1시간 지평의 재료다 — 시간당 스냅샷 1건으로는 채점이 안 된다.
+  //       장중엔 방금 지난 구간만 받고(호출 2회), 마감엔 하루 전체를 다시 받아 빈 구간을
+  //       메운다(13회). 같은 시간 버킷을 덮어쓰므로 여러 번 돌아도 안전하다.
+  if (!backfill && (kind === 'intraday' || kind === 'close')) {
+    try {
+      const windows =
+        kind === 'close'
+          ? [...MINUTE_WINDOWS]
+          : MINUTE_WINDOWS.filter((w) => {
+              const wm = Number(w.slice(0, 2)) * 60 + Number(w.slice(2, 4));
+              const nowMin = kstMinuteOfDay().min;
+              return wm <= nowMin && wm > nowMin - 90; // 방금 지난 90분
+            });
+      const byHour = new Map<string, Array<Record<string, unknown>>>();
+      for (const w of windows) {
+        const bars = await minuteBars(kisToken, creds, SYMBOL, w);
+        for (const b of bars) {
+          const hh = b.time.slice(0, 2);
+          const arr = byHour.get(hh) ?? [];
+          arr.push({ t: b.time, o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume });
+          byHour.set(hh, arr);
+        }
+      }
+      for (const [hh, bars] of byHour) {
+        // 같은 분이 페이지 경계에서 겹칠 수 있다
+        const seen = new Set<string>();
+        const uniq = bars
+          .filter((b) => (seen.has(String(b.t)) ? false : (seen.add(String(b.t)), true)))
+          .sort((a, b) => String(a.t).localeCompare(String(b.t)));
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: 'minute_bars',
+          bucket_key: `${today.dashed}T${hh}:00+09:00`,
+          trading_date_kst: today.dashed,
+          as_of_at: new Date().toISOString(),
+          collector_run_id: runId,
+          payload: { bars: uniq },
+        });
+      }
+      const total = [...byHour.values()].reduce((a, b) => a + b.length, 0);
+      console.log(`[collect] minute_bars ${windows.length}창 → ${byHour.size}시간 버킷, ${total}분`);
+    } catch (e) {
+      errors.push(`minute_bars: ${String(e)}`);
     }
   }
 

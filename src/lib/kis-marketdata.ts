@@ -629,3 +629,60 @@ export async function quarterFinancials(
       debtRatio: num(o.lblt_rate),
     }));
 }
+
+// ── 분봉 (짧은 지평의 재료) ─────────────────────────────────────────────
+
+export interface MinuteBar {
+  /** 'HH:MM' KST */
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/**
+ * 당일 분봉 (FHKST03010200). **`endHhmmss` 직전 30분**을 준다 — 한 번에 30건이라
+ * 하루(09:00~15:30, 390분)를 채우려면 30분 간격으로 13번 부른다.
+ *
+ * 왜 필요한가: 10분·1시간 지평은 시간당 스냅샷 1건으로는 채점조차 못 한다. 분봉이
+ * 있어야 "09:10 시점 예측을 09:20 값으로 채점"이 성립한다 (horizon-board.ts 참고).
+ */
+export async function minuteBars(
+  token: string,
+  creds: KisCreds,
+  symbol: string,
+  endHhmmss: string,
+): Promise<MinuteBar[]> {
+  const body = await kisGet<{ output2?: Array<Record<string, string>> }>(
+    token,
+    creds,
+    '/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice',
+    'FHKST03010200',
+    {
+      FID_ETC_CLS_CODE: '',
+      FID_COND_MRKT_DIV_CODE: 'J',
+      FID_INPUT_ISCD: symbol,
+      FID_INPUT_HOUR_1: endHhmmss,
+      FID_PW_DATA_INCU_YN: 'N',
+    },
+  );
+  return (body.output2 ?? [])
+    .filter((o) => o.stck_cntg_hour && o.stck_prpr)
+    .map((o) => ({
+      time: `${o.stck_cntg_hour!.slice(0, 2)}:${o.stck_cntg_hour!.slice(2, 4)}`,
+      open: num(o.stck_oprc),
+      high: num(o.stck_hgpr),
+      low: num(o.stck_lwpr),
+      close: num(o.stck_prpr),
+      volume: num(o.cntg_vol),
+    }))
+    .sort((a, b) => a.time.localeCompare(b.time));
+}
+
+/** 하루를 덮는 조회 끝점들 (30분 간격). 정규장 09:00~15:30. */
+export const MINUTE_WINDOWS = [
+  '093000', '100000', '103000', '110000', '113000', '120000', '123000',
+  '130000', '133000', '140000', '143000', '150000', '153000',
+] as const;
