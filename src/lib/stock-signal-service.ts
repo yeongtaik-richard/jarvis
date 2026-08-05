@@ -201,6 +201,8 @@ async function computeSignalResult(symbol: string): Promise<SignalComputation> {
     key: 'sox',
     label: '필라델피아 반도체(SOX)',
     containsStock: false,
+    // 미국장이라 D일 종가를 D일에 쓸 수 없다 — 재현 시 하루 미뤄 맞춘다
+    overnight: true,
     bars: soxRows
       .map((r) => ({ date: r.bucketKey, close: num(r.payload, 'close') }))
       .filter((x) => Number.isFinite(x.close) && x.close > 0),

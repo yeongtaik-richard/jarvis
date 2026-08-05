@@ -26,6 +26,16 @@ export interface BenchmarkSeries {
    * 안 들어간 벤치마크만 상대강도를 액면대로 읽을 수 있다.
    */
   containsStock: boolean;
+  /**
+   * **미국장처럼 한국 장 마감 뒤에 끝나는 시장인가.**
+   *
+   * SOX/나스닥의 D일 종가는 한국 시각 D+1 새벽 5시에 나오고 우리 수집은 D+1 아침이다.
+   * 그런데 `asOf(sox, D)`는 SOX 날짜 D를 종목 날짜 D에 붙인다 — 실전에서는 그 데이터가
+   * 아직 없어 문제가 없지만, **백테스트에서는 내일 아침에야 알 값으로 오늘을 계산하는
+   * 룩어헤드**가 된다. 이 플래그가 켜지면 재현 시 하루 뒤로 미뤄 맞춘다.
+   * (2026-08-05 발견. 그전 인샘플 수치는 이 오염을 포함한다.)
+   */
+  overnight?: boolean;
 }
 
 export interface RelativeStrength {
@@ -196,9 +206,11 @@ function covar(a: number[], b: number[]): number {
 function asOf(
   series: { date: string; close: number }[],
   date: string,
+  /** 미국장이면 D일 값을 D일에 쓸 수 없다 — D-1까지만 본다 */
+  overnight = false,
 ): { date: string; close: number } | null {
   for (let i = series.length - 1; i >= 0; i--) {
-    if (series[i]!.date <= date) {
+    if (overnight ? series[i]!.date < date : series[i]!.date <= date) {
       const gap =
         (Date.parse(date) - Date.parse(series[i]!.date)) / 86_400_000;
       return gap <= 5 ? series[i]! : null;
@@ -211,12 +223,13 @@ function excess(
   stock: { date: string; close: number }[],
   bench: { date: string; close: number }[],
   days: number,
+  overnight = false,
 ): number | null {
   if (stock.length < days + 1) return null;
   const startDate = stock[stock.length - 1 - days]!.date;
   const endDate = stock[stock.length - 1]!.date;
-  const bStart = asOf(bench, startDate);
-  const bEnd = asOf(bench, endDate);
+  const bStart = asOf(bench, startDate, overnight);
+  const bEnd = asOf(bench, endDate, overnight);
   if (!bStart || !bEnd || !bStart.close || bStart.date === bEnd.date) return null;
   const s = pctChange(stock, days);
   if (s === null) return null;
@@ -351,8 +364,8 @@ export function computeIndicators(
           ? (() => {
               const startDate = stock[stock.length - 1 - 20]?.date;
               const endDate = stock[stock.length - 1]?.date;
-              const bs = startDate ? asOf(series, startDate) : null;
-              const be = endDate ? asOf(series, endDate) : null;
+              const bs = startDate ? asOf(series, startDate, b.overnight) : null;
+              const be = endDate ? asOf(series, endDate, b.overnight) : null;
               return bs && be && bs.close && bs.date !== be.date
                 ? round((be.close / bs.close - 1) * 100)
                 : null;
@@ -362,9 +375,9 @@ export function computeIndicators(
         key: b.key,
         label: b.label,
         contains_stock: b.containsStock,
-        excess_5d: excess(stock, series, 5),
-        excess_20d: excess(stock, series, 20),
-        excess_60d: excess(stock, series, 60),
+        excess_5d: excess(stock, series, 5, b.overnight),
+        excess_20d: excess(stock, series, 20, b.overnight),
+        excess_60d: excess(stock, series, 60, b.overnight),
         stock_20d_pct: s20 === null ? null : round(s20),
         benchmark_20d_pct: b20,
         index_on_stock_beta: beta,

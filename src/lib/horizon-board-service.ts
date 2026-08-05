@@ -40,7 +40,8 @@ const n = (p: unknown, k: string): number | null => {
 };
 
 export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
-  const [signal, ledger, bars, fin, val, minuteRows, intradayCounts] = await Promise.all([
+  const [signal, ledger, bars, fin, val, minuteRows, intradayCounts, pendingRows] =
+    await Promise.all([
     getStockSignal(symbol),
     getPredictionLedger(symbol, { settledLimit: 200 }),
     getStockHistory(symbol, 'daily_ohlcv', 320),
@@ -67,6 +68,21 @@ export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
         ),
       )
       .groupBy(stockPredictions.kind, stockPredictions.status),
+    // 대기 중인 예측의 **기록된 방향**. 보드는 이걸 보여준다 — 지금 규칙을 다시 돌린
+    // 값을 보여주면 채점되는 것과 다른 방향이 화면에 뜰 수 있다.
+    db
+      .select({
+        kind: stockPredictions.kind,
+        comparator: stockPredictions.comparator,
+        targetBucket: stockPredictions.targetBucket,
+        createdAt: stockPredictions.createdAt,
+      })
+      .from(stockPredictions)
+      .where(
+        and(eq(stockPredictions.symbol, symbol), eq(stockPredictions.status, 'pending')),
+      )
+      .orderBy(desc(stockPredictions.createdAt))
+      .limit(40),
   ]);
 
   const closes = bars.map((b) => n(b.payload, 'close')!).filter(Number.isFinite);
@@ -104,24 +120,24 @@ export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
     };
   };
 
+  // kind별 가장 최근 대기 예측의 방향 (comparator gt=위, lt=아래)
+  const pendingDir = new Map<string, 'up' | 'down'>();
+  for (const r of pendingRows) {
+    if (!pendingDir.has(r.kind)) {
+      pendingDir.set(r.kind, r.comparator === 'gt' ? 'up' : 'down');
+    }
+  }
+
   const rows: HorizonRow[] = HORIZON_BOARD.map((spec) => {
     // HorizonView는 key('d1'/'d5')로 식별한다. spec.kind는 예측 레코드의 kind라 축이 다르다.
     const viewKey = Object.entries(KIND_OF).find(([, k]) => k === spec.kind)?.[0];
     const hz = signal.horizons.find((h) => h.key === viewKey);
     return {
       ...spec,
-      // 장중 레인의 방향은 일별 신호가 아니라 장중 읽기가 낸다. 보드에서는 마지막
-      // 기록된 예측의 방향을 그대로 보여준다 (없으면 빈칸).
-      direction:
-        spec.status !== 'live'
-          ? null
-          : spec.kind && INTRADAY_KINDS.includes(spec.kind)
-            ? null
-            : signal.signal?.raw_direction === 'buy'
-              ? 'up'
-              : signal.signal?.raw_direction === 'sell'
-                ? 'down'
-                : null,
+      // **기록된** 예측의 방향을 보여준다. 지금 규칙을 다시 돌린 값이 아니다 —
+      // 임계값이 바뀌거나 데이터가 갱신되면 둘이 갈라지고, 채점은 기록된 쪽으로
+      // 되므로 화면이 거짓말을 하게 된다.
+      direction: spec.kind ? (pendingDir.get(spec.kind) ?? null) : null,
       target: hz?.target_bucket ?? null,
       record: spec.kind
         ? INTRADAY_KINDS.includes(spec.kind)

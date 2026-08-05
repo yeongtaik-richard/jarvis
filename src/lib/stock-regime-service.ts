@@ -34,10 +34,12 @@ const BENCHMARKS: {
   key: string;
   label: string;
   containsStock: boolean;
+  overnight?: boolean;
 }[] = [
-  { metric: 'benchmark_sox', key: 'sox', label: '필라델피아 반도체(SOX)', containsStock: false },
+  // overnight: 미국장은 한국 장 마감 뒤에 끝나 D일 값을 D일에 쓸 수 없다 (룩어헤드)
+  { metric: 'benchmark_sox', key: 'sox', label: '필라델피아 반도체(SOX)', containsStock: false, overnight: true },
   { metric: 'benchmark_samsung', key: 'samsung', label: '삼성전자', containsStock: false },
-  { metric: 'benchmark_nasdaq', key: 'nasdaq', label: '나스닥 종합', containsStock: false },
+  { metric: 'benchmark_nasdaq', key: 'nasdaq', label: '나스닥 종합', containsStock: false, overnight: true },
   { metric: 'benchmark_kospi', key: 'kospi', label: 'KOSPI', containsStock: true },
   { metric: 'benchmark_electronics', key: 'electronics', label: '전기·전자 업종', containsStock: true },
 ];
@@ -92,6 +94,7 @@ export async function getStockRegime(symbol: string, days = 300): Promise<Regime
     key: b.key,
     label: b.label,
     containsStock: b.containsStock,
+    overnight: b.overnight,
     bars: (benchRows[i] ?? [])
       .map((r) => ({ date: r.bucketKey, close: num(r.payload, 'close') }))
       .filter((x) => Number.isFinite(x.close)),
