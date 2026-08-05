@@ -12,9 +12,16 @@
 
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/client';
-import { stockPredictions, type StockPrediction } from '@/db/schema';
+import { stockPredictions, stockSnapshots, type StockPrediction } from '@/db/schema';
 import { scorePending } from './prediction-service';
 import { HORIZONS } from './stock-signal';
+import {
+  computeAttribution,
+  reviewPrediction,
+  type AttributionSlice,
+  type PredictionReview,
+  type WindowMove,
+} from './prediction-review';
 
 export type LedgerContext = {
   /** 기준 봉의 거래일 — 예측을 건 근거가 된 확정 종가의 날짜 */
@@ -76,6 +83,10 @@ export type PredictionLedger = {
   running: RunningRecord;
   /** 게이트 차단분의 누적 성적 — 통과분보다 좋으면 게이트가 틀렸다는 증거 */
   running_blocked: RunningRecord;
+  /** 채점된 건별 회고 (id → 회고). 왜 맞았나/틀렸나 + 놓친 재료 후보. */
+  reviews: Record<string, PredictionReview>;
+  /** 실전 표본으로 낸 컴포넌트 기여도 — 전체 + 국면별 */
+  attribution: AttributionSlice[];
 };
 
 const HORIZON_BY_KIND = new Map(HORIZONS.map((h) => [h.kind as string, h]));
@@ -159,6 +170,18 @@ export async function getPredictionLedger(
   const all = rows.map(toEntry);
   const pending = all.filter((e) => e.status === 'pending');
 
+  // 놓친 재료 후보 — **신호에 안 들어가는** 지표만 본다. 컴포넌트로 이미 쓰는 것은
+  // 회고에서 따로 다루므로 여기 넣으면 같은 얘기를 두 번 하게 된다.
+  const settledEntries = all.filter(
+    (e) => e.status === 'confirmed' || e.status === 'refuted',
+  );
+  const moveSeries = await loadMoveSeries(symbol);
+  const reviews: Record<string, PredictionReview> = {};
+  for (const e of settledEntries) {
+    const r = reviewPrediction(e, windowMoves(moveSeries, e.as_of, e.target));
+    if (r) reviews[e.id] = r;
+  }
+
   return {
     // 대상일이 지났거나 오늘인데 아직 채점 전 — "오늘 판가름난다"
     due: pending.filter((e) => e.target <= today),
@@ -169,5 +192,53 @@ export async function getPredictionLedger(
     unscored: all.filter((e) => e.status === 'expired' || e.status === 'unverifiable').slice(0, 6),
     running: record(all.filter((e) => e.passed)),
     running_blocked: record(all.filter((e) => !e.passed)),
+    reviews,
+    attribution: computeAttribution(settledEntries.filter((e) => e.passed)),
   };
+}
+
+/** 신호에 안 쓰는 지표들의 일별 종가. 놓친 재료 후보를 찾는 재료다. */
+type MoveSeries = Array<{ key: string; label: string; byDate: Map<string, number> }>;
+
+async function loadMoveSeries(symbol: string): Promise<MoveSeries> {
+  const specs = [
+    { metric: 'benchmark_kospi', key: 'kospi', label: 'KOSPI' },
+    { metric: 'peer_samsung', key: 'samsung', label: '삼성전자' },
+    { metric: 'fx_usdkrw', key: 'usdkrw', label: '원/달러' },
+    { metric: 'fx_usdjpy', key: 'usdjpy', label: '엔/달러' },
+  ];
+  const out: MoveSeries = [];
+  for (const s of specs) {
+    const rows = await db
+      .select({ bucketKey: stockSnapshots.bucketKey, payload: stockSnapshots.payload })
+      .from(stockSnapshots)
+      .where(and(eq(stockSnapshots.symbol, symbol), eq(stockSnapshots.metric, s.metric)))
+      .orderBy(desc(stockSnapshots.bucketKey))
+      .limit(200);
+    const byDate = new Map<string, number>();
+    for (const r of rows) {
+      const v = Number((r.payload as Record<string, unknown>)?.close);
+      if (Number.isFinite(v) && v > 0) byDate.set(r.bucketKey, v);
+    }
+    if (byDate.size > 0) out.push({ key: s.key, label: s.label, byDate });
+  }
+  return out;
+}
+
+/** as_of → target 구간의 변화율. 정확한 날짜가 없으면 가장 가까운 이전 날을 쓴다. */
+function windowMoves(series: MoveSeries, from: string, to: string): WindowMove[] {
+  const at = (m: Map<string, number>, d: string): number | null => {
+    const keys = [...m.keys()].filter((k) => k <= d).sort();
+    const k = keys[keys.length - 1];
+    return k ? (m.get(k) ?? null) : null;
+  };
+  const out: WindowMove[] = [];
+  for (const s of series) {
+    const a = at(s.byDate, from);
+    const b = at(s.byDate, to);
+    if (a !== null && b !== null && a > 0) {
+      out.push({ key: s.key, label: s.label, changePct: (b / a - 1) * 100 });
+    }
+  }
+  return out;
 }

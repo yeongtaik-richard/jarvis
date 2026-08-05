@@ -30,6 +30,7 @@ import {
   overseasIndexDaily,
   overseasIndexDailyRange,
   domesticBusinessDays,
+  quarterFinancials,
   overseasStockDaily,
   foreignHolding,
   investorFlows,
@@ -682,6 +683,29 @@ async function main(): Promise<void> {
       }
     } catch (e) {
       errors.push(`market_calendar: ${String(e)}`);
+    }
+  }
+
+  // 3c) 분기 재무. 긴 지평(6달·1년)은 방향 대신 "위치"로 답하는데 그 재료다
+  //     (stock-position.ts 참고). 분기마다 바뀌니 하루 한 번이면 충분하다.
+  if (!backfill && (kind === 'close' || kind === 'premarket')) {
+    try {
+      const fins = await quarterFinancials(kisToken, creds, SYMBOL);
+      if (fins.length > 0) {
+        queue.push({
+          symbol: SYMBOL,
+          source: 'kis',
+          metric: 'quarter_financials',
+          bucket_key: fins[0]!.period,
+          trading_date_kst: today.dashed,
+          as_of_at: new Date().toISOString(),
+          collector_run_id: runId,
+          payload: { quarters: fins },
+        });
+        console.log(`[collect] quarter_financials ${fins.length}분기 (최신 ${fins[0]!.period})`);
+      }
+    } catch (e) {
+      errors.push(`quarter_financials: ${String(e)}`);
     }
   }
 

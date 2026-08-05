@@ -576,3 +576,56 @@ export async function domesticBusinessDays(
   const seen = new Set<string>();
   return out.filter((b) => (seen.has(b.date) ? false : (seen.add(b.date), true)));
 }
+
+// ── 분기 재무 (긴 지평의 "위치" 답변용) ────────────────────────────────
+
+export interface QuarterFinancial {
+  /** 'YYYYMM' 결산년월 */
+  period: string;
+  roe: number;
+  /** 주당순이익 */
+  eps: number;
+  /** 주당순자산 — PBR 밴드의 분모 */
+  bps: number;
+  /** 주당매출 */
+  sps: number;
+  salesGrowthPct: number;
+  operatingProfitGrowthPct: number;
+  netIncomeGrowthPct: number;
+  debtRatio: number;
+}
+
+/**
+ * 분기 재무비율 (FHKST66430300). 23분기치가 온다 — **긴 지평에서 방향 대신 위치를
+ * 답하기 위한 재료**다. 6달·1년 방향 예측은 검증에 수십 년이 걸려 내지 않는 대신,
+ * "PBR이 이력 밴드의 어디"처럼 오늘 확인 가능한 사실을 보여준다 (horizon-board.ts 참고).
+ *
+ * 반환은 **최신순**. 연간/분기 혼재가 아니라 `FID_DIV_CLS_CODE=0`(연간 누적) 기준이라
+ * `stac_yymm`이 12월인 행과 분기 행이 섞여 나온다 — 쓰는 쪽이 period로 판단할 것.
+ */
+export async function quarterFinancials(
+  token: string,
+  creds: KisCreds,
+  symbol: string,
+): Promise<QuarterFinancial[]> {
+  const body = await kisGet<{
+    output?: Array<Record<string, string>>;
+  }>(token, creds, '/uapi/domestic-stock/v1/finance/financial-ratio', 'FHKST66430300', {
+    FID_DIV_CLS_CODE: '0',
+    fid_cond_mrkt_div_code: 'J',
+    fid_input_iscd: symbol,
+  });
+  return (body.output ?? [])
+    .filter((o) => o.stac_yymm)
+    .map((o) => ({
+      period: o.stac_yymm!,
+      roe: num(o.roe_val),
+      eps: num(o.eps),
+      bps: num(o.bps),
+      sps: num(o.sps),
+      salesGrowthPct: num(o.grs),
+      operatingProfitGrowthPct: num(o.bsop_prfi_inrt),
+      netIncomeGrowthPct: num(o.ntin_inrt),
+      debtRatio: num(o.lblt_rate),
+    }));
+}
