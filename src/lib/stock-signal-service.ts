@@ -4,11 +4,13 @@ import { stockPredictions } from '@/db/schema';
 import { createPrediction, toApiPrediction, type ApiPrediction } from './prediction-service';
 import { HttpError } from './errors';
 import {
+  CHALLENGER_HORIZONS,
   computeRegimeBreakdown,
   computeSignal,
   computeSignalBacktest,
   computeSignalSeries,
   HORIZONS,
+  SIGNAL_VARIANTS,
   type ComponentSlice,
   type RegimeSlice,
   type HorizonKey,
@@ -18,7 +20,10 @@ import {
 } from './stock-signal';
 import {
   computeWeeklyChanges,
+  trendWithWindows,
   type Bar,
+  type Indicators,
+  type Regime,
   type BenchmarkSeries,
   type Flow,
   type WeeklyChange,
@@ -55,6 +60,8 @@ export type HorizonView = {
    * 이 표본이 통과분보다 잘 맞으면 게이트가 틀렸다는 증거가 된다.
    */
   blocked: DirectionalStats;
+  /** 병행 기록 중인 후보 규칙의 실전 성적 (없으면 null) */
+  challenger: { key: string; label: string; live: DirectionalStats } | null;
 };
 
 export type DirectionalStats = {
@@ -89,6 +96,17 @@ export type SignalResult = {
   breakdown: { regimes: RegimeSlice[]; components: ComponentSlice[] };
 };
 
+/**
+ * 내부 계산 결과 — 공개 응답에 **후보 규칙 재계산용 재료**를 덧붙인 것.
+ *
+ * 타입을 나눈 이유: bars는 320개짜리 배열이라 API 응답에 새어 나가면 페이로드가
+ * 통째로 부풀고, 소비자가 그걸 믿고 쓰기 시작하면 되돌리기 어렵다. `getStockSignal`이
+ * 좁은 타입을 돌려주므로 실수로 흘릴 수가 없다.
+ */
+type SignalComputation = SignalResult & {
+  inputs: { indicators: Indicators | null; regime: Regime | null; bars: Bar[] };
+};
+
 function todayKst(): string {
   return new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
 }
@@ -104,14 +122,24 @@ async function directionalStats(
   symbol: string,
   kind: string,
   passed: boolean,
+  /** 규칙 후보. 생략하면 현행(champion) — context에 variant가 없는 옛 행도 여기 든다. */
+  variant: string = 'champion',
 ): Promise<DirectionalStats> {
   const passedExpr = passed
     ? sql`coalesce(${stockPredictions.context} ->> 'passed', 'true') = 'true'`
     : sql`${stockPredictions.context} ->> 'passed' = 'false'`;
+  const variantExpr = sql`coalesce(${stockPredictions.context} ->> 'variant', 'champion') = ${variant}`;
   const rows = await db
     .select({ status: stockPredictions.status, n: sql<number>`count(*)::int` })
     .from(stockPredictions)
-    .where(and(eq(stockPredictions.symbol, symbol), eq(stockPredictions.kind, kind), passedExpr))
+    .where(
+      and(
+        eq(stockPredictions.symbol, symbol),
+        eq(stockPredictions.kind, kind),
+        passedExpr,
+        variantExpr,
+      ),
+    )
     .groupBy(stockPredictions.status);
   const count = (st: string) => rows.find((r) => r.status === st)?.n ?? 0;
   const confirmed = count('confirmed');
@@ -128,6 +156,9 @@ async function directionalStats(
   };
 }
 
+/** 병행 기록할 후보 (지금은 하나). champion은 현행 규칙이라 별도 기록이 없다. */
+const CHALLENGER = SIGNAL_VARIANTS.find((v) => v.key !== 'champion')!;
+
 const num = (payload: unknown, key: string): number => {
   const v = Number((payload as Record<string, unknown> | null)?.[key]);
   return Number.isFinite(v) ? v : NaN;
@@ -135,6 +166,11 @@ const num = (payload: unknown, key: string): number => {
 
 /** 신호 계산 + directional 적중률 + 주간 관점(점수 시계열·백테스트). **부작용 없음**. */
 export async function getStockSignal(symbol: string): Promise<SignalResult> {
+  const { inputs: _drop, ...pub } = await computeSignalResult(symbol);
+  return pub;
+}
+
+async function computeSignalResult(symbol: string): Promise<SignalComputation> {
   const { indicators, regime } = await getStockRegime(symbol);
   const signal = computeSignal(indicators, regime);
 
@@ -190,6 +226,13 @@ export async function getStockSignal(symbol: string): Promise<SignalResult> {
         backtest: computeSignalBacktest(series, bars, h.trading_days),
         live: await directionalStats(symbol, h.kind, true),
         blocked: await directionalStats(symbol, h.kind, false),
+        challenger: CHALLENGER_HORIZONS.includes(h.key)
+          ? {
+              key: CHALLENGER.key,
+              label: CHALLENGER.label,
+              live: await directionalStats(symbol, h.kind, true, CHALLENGER.key),
+            }
+          : null,
       };
     }),
   );
@@ -211,6 +254,7 @@ export async function getStockSignal(symbol: string): Promise<SignalResult> {
     weekly: computeWeeklyChanges(bars, 8),
     score_series: series.slice(-90),
     breakdown: computeRegimeBreakdown(series, bars, 5),
+    inputs: { indicators, regime, bars },
   };
 }
 
@@ -253,7 +297,7 @@ export type RecordResult = {
  * 있으면 건너뛴다 — 하루에 여러 번 불려도 안전하다.
  */
 export async function recordStockSignal(symbol: string): Promise<RecordResult> {
-  const res = await getStockSignal(symbol);
+  const res = await computeSignalResult(symbol);
   const fail = (reason: RecordReason): RecordResult => ({
     recorded: false,
     reason,
@@ -274,19 +318,54 @@ export async function recordStockSignal(symbol: string): Promise<RecordResult> {
   const asOf = res.as_of;
   const lanes: RecordResult['lanes'] = [];
 
-  for (const h of HORIZONS) {
-    const view = res.horizons.find((v) => v.key === h.key)!;
+  // (지평 × 규칙 후보). 후보는 CHALLENGER_HORIZONS에 든 지평에만 붙는다 — 5거래일은
+  // 두 후보의 창이 같아서 같은 예측을 두 번 남기게 되기 때문이다.
+  const jobs = HORIZONS.flatMap((h) =>
+    SIGNAL_VARIANTS.filter(
+      (v) => v.key === 'champion' || CHALLENGER_HORIZONS.includes(h.key),
+    ).map((v) => ({ h, v })),
+  );
+
+  for (const { h, v } of jobs) {
+    // 후보는 추세만 다른 창으로 다시 판정한다. 나머지 컴포넌트(수급·SOX)는 공유한다.
+    const vSig =
+      v.trend_windows === null
+        ? sig
+        : computeSignal(res.inputs.indicators, res.inputs.regime, {
+            trend: trendWithWindows(
+              res.inputs.bars,
+              v.trend_windows.short,
+              v.trend_windows.long,
+            ),
+            trendReason: `${v.label} 기준 추세`,
+          });
+    const vDir = vSig?.raw_direction;
+    const label = v.key === 'champion' ? h.label : `${h.label} · ${v.label}`;
+    if (!vSig || !vDir) {
+      lanes.push({
+        horizon: h.key,
+        label,
+        recorded: false,
+        reason: 'no_direction',
+        prediction: null,
+      });
+      continue;
+    }
+
+    const view = res.horizons.find((x) => x.key === h.key)!;
     const bucket = view.target_bucket;
     if (view.stale) {
       lanes.push({
         horizon: h.key,
-        label: h.label,
+        label,
         recorded: false,
         reason: 'stale_reference',
         prediction: null,
       });
       continue;
     }
+    // 중복 판정에 **후보 축이 들어가야 한다** — 없으면 champion이 먼저 기록된 뒤
+    // 후보가 "이미 있음"으로 막혀서 병행 기록 자체가 성립하지 않는다.
     const [dup] = await db
       .select({ id: stockPredictions.id })
       .from(stockPredictions)
@@ -296,13 +375,14 @@ export async function recordStockSignal(symbol: string): Promise<RecordResult> {
           eq(stockPredictions.kind, h.kind),
           eq(stockPredictions.targetBucket, bucket),
           eq(stockPredictions.status, 'pending'),
+          sql`coalesce(${stockPredictions.context} ->> 'variant', 'champion') = ${v.key}`,
         ),
       )
       .limit(1);
     if (dup) {
       lanes.push({
         horizon: h.key,
-        label: h.label,
+        label,
         recorded: false,
         reason: 'already_pending',
         prediction: null,
@@ -319,23 +399,25 @@ export async function recordStockSignal(symbol: string): Promise<RecordResult> {
         analysis_id: null,
         authored_by: 'rule-signal',
         kind: h.kind,
-        claim: `규칙 ${dir} (${h.label} 지평, ${sig.passed ? '신호 발효' : '게이트 차단 — 검증용'}): ${bucket} 종가가 기준(${asOf} 종가 ${refClose.toLocaleString('ko-KR')}원)보다 ${dir === 'buy' ? '높은지' : '낮은지'} — score ${sig.score}/${sig.max_score}, 변동성 ${sig.volatility}`,
+        claim: `규칙 ${vDir} (${label}, ${vSig.passed ? '신호 발효' : '게이트 차단 — 검증용'}): ${bucket} 종가가 기준(${asOf} 종가 ${refClose.toLocaleString('ko-KR')}원)보다 ${vDir === 'buy' ? '높은지' : '낮은지'} — score ${vSig.score}/${vSig.max_score}, 변동성 ${vSig.volatility}`,
         context: {
+          // 어느 규칙 후보가 낸 예측인지. 없으면 현행(champion)으로 센다.
+          variant: v.key,
           // 기준 봉의 거래일. created_at에서 유추하면 안 된다 — 마감 전에 기록되면
           // 기록일과 기준 봉이 하루 어긋나고, 장부가 "8/4 마감에 → 8/4 판가름" 같은
           // 말이 안 되는 문장을 만든다 (2026-08-04 실제 발생).
           as_of: asOf,
-          score: sig.score,
-          passed: sig.passed,
-          gated: sig.gated_by_volatility,
-          applied_threshold: sig.applied_threshold,
-          volatility: sig.volatility,
+          score: vSig.score,
+          passed: vSig.passed,
+          gated: vSig.gated_by_volatility,
+          applied_threshold: vSig.applied_threshold,
+          volatility: vSig.volatility,
           // 국면·컴포넌트를 박제해야 나중에 "어떤 장에서 무엇이 먹혔나"를 되물을 수 있다
-          components: Object.fromEntries(sig.components.map((c) => [c.key, c.value])),
+          components: Object.fromEntries(vSig.components.map((c) => [c.key, c.value])),
         },
         metric: 'daily_ohlcv',
         field: 'close',
-        comparator: dir === 'buy' ? 'gt' : 'lt',
+        comparator: vDir === 'buy' ? 'gt' : 'lt',
         threshold: refClose,
         target_bucket: bucket,
       });
@@ -354,7 +436,7 @@ export async function recordStockSignal(symbol: string): Promise<RecordResult> {
     }
     lanes.push({
       horizon: h.key,
-      label: h.label,
+      label,
       recorded: true,
       reason: 'recorded',
       prediction: toApiPrediction(row),

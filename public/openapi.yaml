@@ -29,7 +29,7 @@ info:
     그리고 방향은 결정론적 규칙 레인에서만 나온다 — AI 자유 텍스트는 규칙 신호를 인용할 수
     있을 뿐 스스로 방향을 지어내지 않으며, `validated_directional` claim_type은 거부(400)된다.
     적중률을 인용할 때는 표본 수와 기저율을 반드시 함께 말할 것.
-  version: '1.13.0'
+  version: '1.14.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -1260,6 +1260,24 @@ paths:
                             refuted: { type: integer }
                             scored: { type: integer }
                             hit_rate: { type: [number, 'null'] }
+                        challenger:
+                          type: [object, 'null']
+                          description: |
+                            병행 기록 중인 **후보 규칙**의 실전 성적. 현행 규칙을 바꾸지 않고
+                            같은 날 같은 조건으로 채점받게 해서, 표본이 쌓인 뒤 실전 데이터로
+                            고르려는 것이다. 지금은 1거래일 지평에만 붙는다(5거래일은 두 후보의
+                            이동평균 창이 같다). 매매 신호가 아니다.
+                          properties:
+                            key: { type: string }
+                            label: { type: string }
+                            live:
+                              type: object
+                              properties:
+                                pending: { type: integer }
+                                confirmed: { type: integer }
+                                refuted: { type: integer }
+                                scored: { type: integer }
+                                hit_rate: { type: [number, 'null'] }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/stock/decision:

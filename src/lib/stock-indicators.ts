@@ -379,6 +379,29 @@ export type Trend = 'up' | 'down' | 'sideways' | 'unknown';
 export type Volatility = 'calm' | 'normal' | 'elevated' | 'extreme' | 'unknown';
 export type FlowState = 'foreign_buying' | 'foreign_selling' | 'mixed' | 'unknown';
 
+/**
+ * 임의의 창으로 **추세만** 다시 판정한다 — 후보 규칙을 병행 기록하기 위한 것.
+ *
+ * `classifyRegime`은 20/60 고정이다. 인샘플 비교에서 1거래일 지평은 10/20이 더 나았고
+ * (+3.6%p vs +1.4%p) 5거래일 지평은 20/60이 더 나았는데, 표본이 겹쳐 유의하다고 말할 수
+ * 없다. 그래서 규칙을 갈아치우는 대신 후보를 하나 더 달아 **실전 데이터로** 판정한다.
+ * 판정 로직은 classifyRegime과 같은 식이어야 비교가 성립하므로 그대로 옮겨왔다.
+ */
+export function trendWithWindows(bars: Bar[], short: number, long: number): Trend {
+  if (bars.length < long) return 'unknown';
+  const closes = bars.map((b) => b.close);
+  const last = closes[closes.length - 1]!;
+  const ms = mean(closes.slice(-short));
+  const ml = mean(closes.slice(-long));
+  if (!ms || !ml) return 'unknown';
+  const dist = (last / ms - 1) * 100;
+  const stacked = Math.sign(ms - ml);
+  if (Math.abs(dist) <= TREND_FLAT_PCT || stacked === 0) return 'sideways';
+  if (dist > 0 && stacked > 0) return 'up';
+  if (dist < 0 && stacked < 0) return 'down';
+  return 'sideways';
+}
+
 export interface Regime {
   trend: Trend;
   volatility: Volatility;

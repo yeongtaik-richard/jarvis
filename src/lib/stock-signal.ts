@@ -19,6 +19,7 @@ import {
   type Flow,
   type Indicators,
   type Regime,
+  type Trend,
 } from './stock-indicators';
 
 export type SignalValue = 'buy' | 'sell' | 'watch';
@@ -76,19 +77,23 @@ export const SIGNAL_DISCLAIMER =
 export function computeSignal(
   ind: Indicators | null,
   regime: Regime | null,
+  /** 추세만 다른 창으로 갈아끼운다 — 후보 규칙 병행 기록용 (SIGNAL_VARIANTS 참고). */
+  opts?: { trend?: Trend; trendReason?: string },
 ): RuleSignal | null {
   if (!ind || !regime) return null;
 
   const components: SignalComponent[] = [];
+  const trend = opts?.trend ?? regime.trend;
 
   // 1) 추세 — regime의 보수적 판정을 그대로 쓴다 (가격·MA 배열이 일치할 때만 방향).
   components.push({
     key: 'trend',
-    value: regime.trend === 'up' ? 1 : regime.trend === 'down' ? -1 : 0,
+    value: trend === 'up' ? 1 : trend === 'down' ? -1 : 0,
     reason:
-      regime.trend === 'unknown'
+      opts?.trendReason ??
+      (trend === 'unknown'
         ? '추세를 판단할 만큼 데이터가 없다'
-        : `${TREND_WORD[regime.trend] ?? regime.trend} — 20일 평균선 대비 ${ind.dist_ma20_pct ?? '?'}%`,
+        : `${TREND_WORD[trend] ?? trend} — 20일 평균선 대비 ${ind.dist_ma20_pct ?? '?'}%`),
   });
 
   // 2) 수급 — 외국인 20일 누적과 연속 방향이 일치할 때만 방향.
@@ -164,6 +169,24 @@ export const HORIZONS = [
 ] as const;
 
 export type HorizonKey = (typeof HORIZONS)[number]['key'];
+
+/**
+ * 병행 기록되는 규칙 후보. **현행(champion)을 바꾸지 않고** 옆에 하나 더 달아 같은 날
+ * 같은 조건으로 채점받게 한다. 인샘플 숫자로 규칙을 갈아치우면 과거에 맞춰 깎는 셈이라,
+ * 실전 표본이 쌓인 뒤에 고르려는 것이다.
+ *
+ * `trend_windows`가 null이면 현행 국면 판정(20/60)을 그대로 쓴다. 5거래일 지평은 두
+ * 후보가 같은 창이라 후보를 따로 기록하지 않는다 — 같은 예측을 두 번 남길 이유가 없다.
+ */
+export const SIGNAL_VARIANTS = [
+  { key: 'champion', label: '현행 20/60', trend_windows: null },
+  { key: 'ma_10_20', label: '지평별 창 10/20', trend_windows: { short: 10, long: 20 } },
+] as const;
+
+export type VariantKey = (typeof SIGNAL_VARIANTS)[number]['key'];
+
+/** 후보를 병행 기록할 지평. 1거래일만 — 5거래일은 두 후보의 창이 같다. */
+export const CHALLENGER_HORIZONS: HorizonKey[] = ['d1'];
 
 // ── 점수 시계열 + 백테스트 ──────────────────────────────────────────────
 

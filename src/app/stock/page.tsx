@@ -852,6 +852,18 @@ export default async function StockDashboardPage() {
                       </span>
                       .
                     </div>
+                    {/* 병행 기록 중인 후보 규칙. 현행을 바꾸지 않고 같은 날 같은 조건으로
+                        채점받게 해서, 몇 달 뒤 실전 데이터로 고르려는 것이다. */}
+                    {h.challenger && (
+                      <div className="mt-1 text-zinc-400">
+                        후보 {h.challenger.label}:{' '}
+                        {h.challenger.live.scored > 0
+                          ? `${h.challenger.live.scored}건 중 ${Math.round((h.challenger.live.hit_rate ?? 0) * 100)}% 맞음`
+                          : h.challenger.live.pending > 0
+                            ? `아직 없음 (${h.challenger.live.pending}건 대기)`
+                            : '아직 없음'}
+                      </div>
+                    )}
                     <div className="mt-1 text-zinc-500">
                       실제 성적:{' '}
                       {h.live.scored > 0
@@ -973,6 +985,12 @@ export default async function StockDashboardPage() {
                 장이었을 수 있어서, 아무 날이나 샀을 때보다 얼마나 나은지가 규칙의 실력이다.
               </li>
               <li>· 규칙은 하나다. 언제 채점하느냐만 다르다.</li>
+              <li>
+                · "후보"는 <strong>현행을 바꾸지 않고</strong> 옆에 달아둔 다른 규칙이다.
+                과거 재적용에서는 하루 지평에 짧은 이동평균선(10/20)이 나아 보였는데, 그
+                숫자로 바로 갈아타면 과거에 맞춰 깎는 셈이라 같은 조건으로 채점받게 해서
+                실전으로 고른다.
+              </li>
               <li>
                 · "과거에 돌려보면"은 {signalResult.horizons[0]?.backtest.note} 믿을 숫자는 각
                 칸의 "실제 성적"이고, 그건 지금부터 매 거래일 쌓인다.
