@@ -155,7 +155,12 @@ export function computeStockPosition(
   const facets: StockPosition['facets'] = {
     // 2달 — 다음 분기 실적이 지배하는 구간
     m2: {
-      short: earnings.reading,
+      short:
+        streak >= 2
+          ? `영업이익 ${streak}분기 연속 ↑`
+          : streak <= -2
+            ? `영업이익 ${-streak}분기 연속 ↓`
+            : '영업이익 방향 일정치 않음',
       long: `다음 분기 실적이 지배하는 구간이다. ${earnings.reading} (최근 ROE ${latest.roe}%, 영업이익 증가율 ${latest.operatingProfitGrowthPct}%). 실적 방향이 바뀌면 이 칸이 먼저 바뀐다.`,
     },
     // 6달 — 밸류에이션이 지배

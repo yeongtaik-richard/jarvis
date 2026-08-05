@@ -737,7 +737,7 @@ export default async function StockDashboardPage() {
             ) : (
               !marketOpen && (
                 <div className="mt-2 text-xs text-zinc-400">
-                  장이 열리면 남은 시간 읽기가 여기 표시된다.
+                  장중에만 남은 시간 읽기가 나온다. 지금은 마지막 관측치다.
                 </div>
               )
             )}

@@ -34,19 +34,19 @@ function Row({ r }: { r: HorizonRow }) {
   return (
     <details className="border-t border-zinc-100 dark:border-zinc-900 first:border-t-0">
       <summary className="cursor-pointer select-none py-3 flex items-baseline gap-2 text-sm">
-        <span className="w-[5.5rem] shrink-0 font-medium">{r.label}</span>
-        <span className="w-14 shrink-0">
+        <span className="w-[4.75rem] shrink-0 font-medium">{r.label}</span>
+        <span className="w-12 shrink-0 text-xs">
           {r.direction ? (
             <span className={DIR[r.direction].cls}>{DIR[r.direction].word}</span>
           ) : (
             <span className="text-zinc-400">—</span>
           )}
         </span>
-        <span className="min-w-0 flex-1 text-zinc-500 tabular-nums">
+        <span className="min-w-0 flex-1 text-xs text-zinc-500 tabular-nums">
           {r.record && r.record.scored > 0
-            ? `${r.record.scored}건 중 ${r.record.hits}건 맞음`
+            ? `${r.record.hits}/${r.record.scored}건 맞음`
             : r.status === 'live'
-              ? '채점된 것 없음'
+              ? `0/30건 · ${daysToText(r.daysTo30)}`
               : r.status === 'position_only' && r.position
                 ? (r.position.facets[r.key]?.short ?? r.position.headline)
                 : ''}
@@ -70,8 +70,13 @@ function Row({ r }: { r: HorizonRow }) {
         )}
         <div>
           <span className="text-zinc-500">검증 </span>
-          지평 {humanSpan(r.tradingDays)} · 독립 표본 30개까지 {daysToText(r.daysTo30)}
+          {humanSpan(r.tradingDays)} 앞을 본다 · 믿을 만한 표본(30건)까지 {daysToText(r.daysTo30)}
         </div>
+        {r.status === 'live' && !r.direction && (
+          <div className="text-zinc-500">
+            지금은 방향이 비어 있다 — 장중에만 판정하고, 장이 닫히면 다음 개장까지 쉰다.
+          </div>
+        )}
         {r.note && <div className="text-zinc-500">{r.note}</div>}
         {r.position && (
           <div className="pt-1 space-y-1">

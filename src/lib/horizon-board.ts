@@ -42,6 +42,12 @@ export interface HorizonSpec {
   label: string;
   /** 대략 몇 거래일짜리 지평인가. 분 단위는 1보다 작다. */
   tradingDays: number;
+  /**
+   * 하루에 몇 건 쌓이나. 하루 미만 지평은 이게 표본 속도를 정한다 —
+   * `tradingDays`만으로 계산하면 1시간(하루 5건)과 오늘 마감(하루 6건)이
+   * 똑같이 "30거래일"로 뭉개진다. 하루 1건 이하면 생략.
+   */
+  samplesPerDay?: number;
   /** 이 지평을 예측하려면 무엇이 필요한가 (사람이 읽는 말) */
   needs: string;
   status: HorizonStatus;
@@ -51,16 +57,29 @@ export interface HorizonSpec {
   note: string;
 }
 
-/** 독립 표본 30개까지 몇 거래일 걸리나 (중첩 창은 실질 표본이 n/h이라는 전제). */
-export function tradingDaysTo30Samples(tradingDays: number): number {
-  return Math.ceil(Math.max(tradingDays, 1) * 30);
+/**
+ * 독립 표본 30개까지 몇 거래일 걸리나.
+ *
+ * 두 갈래다. 하루에 여러 건 쌓이는 지평(장중)은 **하루 표본 수**가 속도를 정하고,
+ * 하루 이상 지평은 **중첩 창** 때문에 실질 표본이 n/h로 줄어드는 게 속도를 정한다.
+ * 한쪽 공식만 쓰면 1시간 지평이 "30거래일"로 나온다 — 실제로는 6거래일이다.
+ */
+export function tradingDaysTo30Samples(spec: {
+  tradingDays: number;
+  samplesPerDay?: number;
+}): number {
+  if (spec.samplesPerDay && spec.samplesPerDay > 1) {
+    return Math.ceil(30 / spec.samplesPerDay);
+  }
+  return Math.ceil(Math.max(spec.tradingDays, 1) * 30);
 }
 
-/** 사람이 읽는 기간. 250거래일 = 1년. */
+/** 사람이 읽는 지평 길이. */
 export function humanSpan(tradingDays: number): string {
-  if (tradingDays < 1) return '하루 안';
+  if (tradingDays <= 0.03) return '10분';
+  if (tradingDays <= 0.2) return '1시간';
+  if (tradingDays < 1) return '당일 안';
   if (tradingDays < 10) return `${Math.round(tradingDays)}거래일`;
-  if (tradingDays < 60) return `약 ${Math.round(tradingDays / 20)}개월`;
   if (tradingDays < 250) return `약 ${Math.round(tradingDays / 20)}개월`;
   return `약 ${(tradingDays / 250).toFixed(tradingDays % 250 === 0 ? 0 : 1)}년`;
 }
@@ -76,6 +95,7 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     key: 'm10',
     label: '10분 뒤',
     tradingDays: 0.026,
+    samplesPerDay: 37,
     needs: '분 단위 실시간 수집',
     status: 'no_data',
     note: '10분마다 수집이 있어야 성립한다. 지금 인프라(시간당 크론)로는 안 되고, 분봉으로 사후에 격자를 채우는 건 예측이 아니라 재현이다. 상시 프로세스를 붙일지는 별개 결정.',
@@ -84,6 +104,7 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     key: 'h1',
     label: '1시간 뒤',
     tradingDays: 0.15,
+    samplesPerDay: 5,
     needs: '장중 궤적·프로그램 수급·분봉',
     status: 'live',
     kind: 'directional_h1',
@@ -93,6 +114,7 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     key: 'd0',
     label: '오늘 마감',
     tradingDays: 0.5,
+    samplesPerDay: 6,
     needs: '장중 궤적·수급·시장',
     status: 'live',
     kind: 'directional_d0',
@@ -119,7 +141,7 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     key: 'w0',
     label: '이번 주 마감',
     tradingDays: 3,
-    needs: 'd1과 같은 재료',
+    needs: '추세·수급·상대강도 (익일과 같다)',
     status: 'not_built',
     note: '남은 거래일 수에 따라 지평이 매일 달라져 별도 처리가 필요하다.',
   },

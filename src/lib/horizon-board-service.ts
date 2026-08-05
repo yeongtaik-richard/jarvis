@@ -128,7 +128,7 @@ export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
           ? intradayRecord(spec.kind)
           : recordFor(spec.kind)
         : null,
-      daysTo30: tradingDaysTo30Samples(spec.tradingDays),
+      daysTo30: tradingDaysTo30Samples(spec),
       position: spec.status === 'position_only' ? position : null,
     };
   });
