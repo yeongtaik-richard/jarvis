@@ -62,10 +62,11 @@ export async function recordPremarketSignal(symbol: string): Promise<PremarketRe
   const nowMin = kst.getUTCHours() * 60 + kst.getUTCMinutes();
   const empty: PremarketResult = { tradingDate: today, direction: null, headline: null, lanes: [] };
 
-  const [sox, nasdaq, usdkrw, ohlcv] = await Promise.all([
+  const [sox, nasdaq, usdkrw, adr, ohlcv] = await Promise.all([
     overnightPct(symbol, 'benchmark_sox', today),
     overnightPct(symbol, 'benchmark_nasdaq', today),
     overnightPct(symbol, 'fx_usdkrw', today),
+    overnightPct(symbol, 'adr_price', today),
     getStockHistory(symbol, 'daily_ohlcv', 3),
   ]);
   const prev = ohlcv[ohlcv.length - 1];
@@ -75,7 +76,12 @@ export async function recordPremarketSignal(symbol: string): Promise<PremarketRe
     return { ...empty, lanes: [{ kind: 'directional_pm_close', label: '당일 종가', recorded: false, reason: 'no_data', prediction: null }] };
   }
 
-  const input: OvernightInput = { soxPct: sox, nasdaqPct: nasdaq, usdkrwPct: usdkrw };
+  const input: OvernightInput = {
+    soxPct: sox,
+    nasdaqPct: nasdaq,
+    usdkrwPct: usdkrw,
+    adrPct: adr,
+  };
   const sig = computePremarketSignal(input);
   if (!sig) return { ...empty, lanes: [{ kind: 'directional_pm_close', label: '당일 종가', recorded: false, reason: 'no_data', prediction: null }] };
 
@@ -134,7 +140,7 @@ export async function recordPremarketSignal(symbol: string): Promise<PremarketRe
           passed: true,
           horizon: p.kind,
           components: Object.fromEntries(sig.components.map((c) => [c.key, c.value])),
-          overnight: { sox, nasdaq, usdkrw },
+          overnight: { sox, nasdaq, usdkrw, adr },
         },
       });
       result.lanes.push({ kind: p.kind, label: p.label, recorded: true, reason: 'recorded', prediction: toApiPrediction(row) });

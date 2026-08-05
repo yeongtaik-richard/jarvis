@@ -13,9 +13,15 @@
  * | 간밤 나스닥 | 90 | +33.9%p | +16.1%p |
  * | 간밤 원/달러(역) | 156 | +14.2%p | +6.7%p |
  *
- * 뺀 것: **ADR**은 표본 13건뿐이라 못 쓴다(가장 직접적인 재료일 텐데 수집 이력이 짧다 —
- * 쌓이면 넣는다). **전일 삼성전자**는 +0.7%p / −7.3%p로 효과가 없다. 이미 어제 한국장에서
- * 같이 움직인 정보라 새로울 게 없다는 뜻으로 읽힌다.
+ * **ADR도 넣는다** (n=13, 시가 +11.0%p / 종가 −2.2%p). 표본이 적어 백테스트로는 판정이
+ * 안 되지만, 그건 **빼야 할 이유가 아니라 지금부터 재야 할 이유**다. 미국에서 하이닉스
+ * 자체를 거래하는 값이라 이론적으로 가장 직접적인 재료이고, 실전 채점의 컴포넌트별 귀속
+ * 분석(`prediction-review.computeAttribution`)이 몇 주면 값어치를 알려준다. 빼두면 영영
+ * 모른다. — "표본 쌓인 뒤에 고친다"는 **이미 측정된 규칙을 인샘플 숫자로 갈아치우지 말라는
+ * 뜻**이지, 새 재료를 넣지 말라는 뜻이 아니다.
+ *
+ * 뺀 것: **전일 삼성전자**는 +0.7%p / −7.3%p로 효과가 없다. 이미 어제 한국장에서 같이
+ * 움직인 정보라 새로울 게 없다는 뜻으로 읽힌다.
  *
  * ## 시가 예측을 액면대로 믿으면 안 된다
  * 시가 쪽 수치가 큰 건 **거의 동어반복**이기 때문이다 — 갭이 곧 간밤 해외장을 반영하는
@@ -29,10 +35,12 @@ export interface OvernightInput {
   nasdaqPct: number | null;
   /** 원/달러 변화율 (%). 원화 강세면 음수. */
   usdkrwPct: number | null;
+  /** SKHY ADR 변화율 (%). 미국에서 거래되는 하이닉스 자체. */
+  adrPct: number | null;
 }
 
 export interface PremarketComponent {
-  key: 'sox' | 'nasdaq' | 'usdkrw';
+  key: 'sox' | 'nasdaq' | 'usdkrw' | 'adr';
   value: -1 | 0 | 1;
   reason: string;
 }
@@ -49,8 +57,13 @@ export interface PremarketSignal {
 const INDEX_PCT = 1;
 /** 환율은 움직임 폭이 작아 임계도 낮다. */
 const FX_PCT = 0.3;
-/** |score|가 이 값 이상이어야 방향을 낸다. */
-const THRESHOLD = 2;
+/** ADR은 종목 자체라 지수보다 크게 움직인다. */
+const ADR_PCT = 2;
+/**
+ * 방향을 내려면 **과반**이 같은 쪽이어야 한다. 컴포넌트 수가 재료 가용성에 따라
+ * 달라지므로(ADR·나스닥이 빠질 수 있다) 고정 임계 대신 과반으로 잡는다.
+ */
+const threshold = (n: number) => Math.ceil(n / 2);
 
 const sign = (v: number, th: number): -1 | 0 | 1 => (v > th ? 1 : v < -th ? -1 : 0);
 const pct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
@@ -72,6 +85,14 @@ export function computePremarketSignal(input: OvernightInput): PremarketSignal |
       reason: `간밤 나스닥 ${pct(input.nasdaqPct)}`,
     });
   }
+  if (input.adrPct !== null) {
+    // 지수보다 변동이 커서 임계도 높다 — 종목 자체라 하루 5%씩 움직인다.
+    components.push({
+      key: 'adr',
+      value: sign(input.adrPct, ADR_PCT),
+      reason: `간밤 ADR ${pct(input.adrPct)}`,
+    });
+  }
   if (input.usdkrwPct !== null) {
     // 원화가 강해지면(환율 하락) 외국인 자금에 유리 — 부호를 뒤집는다.
     components.push({
@@ -80,11 +101,13 @@ export function computePremarketSignal(input: OvernightInput): PremarketSignal |
       reason: `간밤 원/달러 ${pct(input.usdkrwPct)} (${input.usdkrwPct < 0 ? '원화 강세' : '원화 약세'})`,
     });
   }
-  // 재료가 둘 미만이면 임계(2)를 넘을 수 없어 판정 자체가 성립하지 않는다.
+  // 재료가 하나뿐이면 "과반"이 그 하나가 돼 단일 지표 신호가 된다 — 그건 이 레인의
+  // 설계가 아니다. 둘 이상일 때만 판정한다.
   if (components.length < 2) return null;
 
   const score = components.reduce((a, c) => a + c.value, 0);
-  const direction = score >= THRESHOLD ? 'up' : score <= -THRESHOLD ? 'down' : null;
+  const th = threshold(components.length);
+  const direction = score >= th ? 'up' : score <= -th ? 'down' : null;
   const lit = components.filter((c) => c.value !== 0);
   const headline =
     direction === null
