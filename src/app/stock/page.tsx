@@ -703,7 +703,7 @@ export default async function StockDashboardPage() {
                   href="/stock/horizons"
                   className="text-sm px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-900"
                 >
-                  지평 보드
+                  예측 보드
                 </Link>
                 <Link
                   href="/stock/decisions"
@@ -1056,7 +1056,7 @@ export default async function StockDashboardPage() {
               <li>· 규칙은 하나다. 언제 채점하느냐만 다르다.</li>
               <li>
                 · "후보"는 <strong>현행을 바꾸지 않고</strong> 옆에 달아둔 다른 규칙이다.
-                과거 재적용에서는 하루 지평에 짧은 이동평균선(10/20)이 나아 보였는데, 그
+                과거 재적용에서는 하루 뒤를 볼 때 짧은 이동평균선(10/20)이 나아 보였는데, 그
                 숫자로 바로 갈아타면 과거에 맞춰 깎는 셈이라 같은 조건으로 채점받게 해서
                 실전으로 고른다.
               </li>

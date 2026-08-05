@@ -108,9 +108,9 @@ export default async function HorizonsPage() {
       <Header />
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-5">
         <div>
-          <h1 className="text-xl font-semibold">지평 보드</h1>
+          <h1 className="text-xl font-semibold">예측 보드</h1>
           <p className="text-xs text-zinc-500 mt-1">
-            10분 뒤부터 1년 뒤까지, 각 시점에 대해 지금 무엇을 말할 수 있나 ·{' '}
+            10분 뒤부터 1년 뒤까지 — 각 시점에 대해 지금 무엇을 말할 수 있나 ·{' '}
             <Link href="/stock" className="underline hover:text-zinc-700">
               참고정보로
             </Link>
@@ -118,7 +118,7 @@ export default async function HorizonsPage() {
         </div>
 
         <div className="text-sm text-zinc-500">
-          {board.rows.length}개 지평 중 <strong className="text-zinc-700 dark:text-zinc-300">{live}개</strong>가
+          {board.rows.length}개 시점 중 <strong className="text-zinc-700 dark:text-zinc-300">{live}개</strong>를
           예측·채점 중 · {missing}개는 아직 못 한다
           {board.asOf && <span className="text-zinc-400"> · 기준 {board.asOf} 마감</span>}
         </div>
@@ -132,15 +132,15 @@ export default async function HorizonsPage() {
         {/* 빈칸이 많은 게 정상이라는 걸 화면이 스스로 말해야 한다 */}
         <div className="text-[11px] text-zinc-400 space-y-1">
           <p>
-            · 칸을 다 채우지 않는다. 지평마다 재료가 있는지, 검증이 가능한지가 다르고 그 차이를
+            · 칸을 다 채우지 않는다. 시점마다 재료가 있는지, 검증이 가능한지가 다르고 그 차이를
             숨기면 보드가 거짓말을 시작한다.
           </p>
           <p>
-            · <strong>긴 지평은 방향을 내지 않는다.</strong> 한 종목만 추적하면 1년 지평은 연 1표본이라
+            · <strong>먼 시점은 방향을 내지 않는다.</strong> 한 종목만 추적하면 1년 뒤는 연 1표본이라
             검증에 30년이 걸린다. 대신 지금 확인 가능한 위치(밸류에이션·실적 추세)를 답한다.
           </p>
           <p>
-            · 짧은 지평은 분봉이 있어야 채점된다. 지금 {board.minuteDays}일치 쌓였고, 분봉은 당일치만
+            · 가까운 시점은 분봉이 있어야 채점된다. 지금 {board.minuteDays}일치 쌓였고, 분봉은 당일치만
             받을 수 있어 매일 모아야 한다.
           </p>
         </div>

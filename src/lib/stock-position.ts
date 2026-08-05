@@ -173,7 +173,7 @@ export function computeStockPosition(
     // 1년 — 사이클 위치
     y1: {
       short: `고점 대비 ${drawdown}%`,
-      long: `이력 고점 대비 ${drawdown}%. ROE는 ${latest.roe}%로 ${quarters.filter((q) => q.roe < latest.roe).length}/${quarters.length}분기보다 높다. 1년 지평은 메모리 사이클이 지배하는데 그 재료(현물가·설비투자)는 아직 안 모은다.`,
+      long: `이력 고점 대비 ${drawdown}%. ROE는 ${latest.roe}%로 ${quarters.filter((q) => q.roe < latest.roe).length}/${quarters.length}분기보다 높다. 1년 뒤는 메모리 사이클이 지배하는데 그 재료(현물가·설비투자)는 아직 안 모은다.`,
     },
   };
 

@@ -137,7 +137,7 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     needs: '추세·수급·상대강도',
     status: 'live',
     kind: 'directional_1d',
-    note: '전날 마감(18:43)에 예측한다. 그 시점엔 간밤 해외장이 아직 안 끝나 못 쓴다 — 같은 대상을 개장 전에 다시 예측하는 레인(아래 "개장 전 오늘 종가")과 비교하면 간밤 해외장의 값어치가 실전으로 측정된다.',
+    note: '전날 마감(18:43)에 예측한다. 그 시점엔 간밤 해외장이 아직 안 끝나 못 쓴다 — 같은 종가를 개장 전에 다시 예측하는 줄(아래 "개장 전 오늘 종가")과 비교하면 간밤 해외장의 값어치가 실전으로 측정된다.',
   },
   {
     key: 'pm_close',
@@ -147,7 +147,7 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     needs: '간밤 SOX·나스닥·ADR·환율',
     status: 'live',
     kind: 'directional_pm_close',
-    note: '"다음 장 마감"과 같은 종가를 대상으로 하되 개장 전에 예측한다. 재료가 아니라 시점만 다르다.',
+    note: '"다음 장 마감"과 같은 종가를 맞히되 개장 전에 예측한다. 재료가 아니라 시점만 다르다.',
   },
   {
     key: 'w0',
@@ -155,7 +155,7 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     tradingDays: 3,
     needs: '추세·수급·상대강도 (익일과 같다)',
     status: 'not_built',
-    note: '남은 거래일 수에 따라 지평이 매일 달라져 별도 처리가 필요하다.',
+    note: '남은 거래일 수에 따라 기간이 매일 달라져 별도 처리가 필요하다.',
   },
   {
     key: 'w1',
@@ -172,7 +172,7 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     tradingDays: 20,
     needs: '업황 모멘텀·실적 시즌',
     status: 'not_built',
-    note: '엔진에 지평만 더하면 되지만, 30표본까지 2.4년이 걸린다.',
+    note: '엔진에 대상만 더하면 되지만, 30표본까지 2.4년이 걸린다.',
   },
   {
     key: 'm2',
@@ -196,6 +196,6 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     tradingDays: 250,
     needs: '실적 사이클·밸류에이션',
     status: 'position_only',
-    note: '한 종목만 추적하면 연 1표본이다. 검증에 30년 — 방향은 내지 않는다.',
+    note: '한 종목만 추적하면 연 1표본이다. 검증에 30년 걸려 방향은 내지 않는다.',
   },
 ];
