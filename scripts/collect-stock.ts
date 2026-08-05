@@ -392,7 +392,25 @@ async function main(): Promise<void> {
       errors.push(`intraday_price: ${String(e)}`);
     }
     await collectEvents(apiToken, runId, errors);
-    await flush(apiToken, runId, kind, queue, errors);
+    const { posted: intraPosted } = await flush(apiToken, runId, kind, queue, errors);
+
+    // 장중 예측(1시간 뒤·오늘 마감)을 기록한다. 표본이 하루 5~6건씩 쌓여 일별 레인보다
+    // 훨씬 빨리 검증된다. flush 뒤라야 방금 받은 분봉·현재가를 근거로 쓴다.
+    if (intraPosted > 0) {
+      try {
+        const res = await fetch(`${BASE}/api/stock/intraday-signal?symbol=${SYMBOL}`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${apiToken}` },
+        });
+        const body = (await res.json()) as { at?: string; direction?: string; lanes?: Array<{ kind: string; reason: string }> };
+        console.log(
+          `[collect] intraday-signal ${res.status} ${body.at ?? ''} ${body.direction ?? '방향없음'} ` +
+            (body.lanes ?? []).map((l) => `${l.kind}=${l.reason}`).join(' '),
+        );
+      } catch (e) {
+        console.warn(`[collect] intraday-signal failed: ${String(e)}`);
+      }
+    }
     finishRun(errors);
     return;
   }

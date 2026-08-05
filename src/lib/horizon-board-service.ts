@@ -5,9 +5,9 @@
  * 한눈에 보이는 데 있고, 빈칸을 그럴듯한 숫자로 메우면 그 값어치가 사라진다.
  */
 
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db/client';
-import { stockSnapshots } from '@/db/schema';
+import { stockPredictions, stockSnapshots } from '@/db/schema';
 import { HORIZON_BOARD, tradingDaysTo30Samples, type HorizonSpec } from './horizon-board';
 import { getPredictionLedger, type RunningRecord } from './prediction-ledger';
 import { computeStockPosition, type QuarterPoint, type StockPosition } from './stock-position';
@@ -40,7 +40,7 @@ const n = (p: unknown, k: string): number | null => {
 };
 
 export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
-  const [signal, ledger, bars, fin, val, minuteRows] = await Promise.all([
+  const [signal, ledger, bars, fin, val, minuteRows, intradayCounts] = await Promise.all([
     getStockSignal(symbol),
     getPredictionLedger(symbol, { settledLimit: 200 }),
     getStockHistory(symbol, 'daily_ohlcv', 320),
@@ -52,6 +52,21 @@ export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
       .where(and(eq(stockSnapshots.symbol, symbol), eq(stockSnapshots.metric, 'minute_bars')))
       .orderBy(desc(stockSnapshots.bucketKey))
       .limit(400),
+    // 장중 레인은 장부(일별 HORIZONS 기반)에 없어서 예측 테이블을 직접 센다.
+    db
+      .select({
+        kind: stockPredictions.kind,
+        status: stockPredictions.status,
+        n: sql<number>`count(*)::int`,
+      })
+      .from(stockPredictions)
+      .where(
+        and(
+          eq(stockPredictions.symbol, symbol),
+          inArray(stockPredictions.kind, INTRADAY_KINDS),
+        ),
+      )
+      .groupBy(stockPredictions.kind, stockPredictions.status),
   ]);
 
   const closes = bars.map((b) => n(b.payload, 'close')!).filter(Number.isFinite);
@@ -75,20 +90,44 @@ export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
     };
   };
 
+  const intradayRecord = (kind: string): RunningRecord | null => {
+    const rows = intradayCounts.filter((r) => r.kind === kind);
+    if (rows.length === 0) return null;
+    const get = (st: string) => rows.find((r) => r.status === st)?.n ?? 0;
+    const hits = get('confirmed');
+    const scored = hits + get('refuted');
+    return {
+      scored,
+      hits,
+      hit_rate: scored ? Number((hits / scored).toFixed(3)) : null,
+      streak: 0,
+    };
+  };
+
   const rows: HorizonRow[] = HORIZON_BOARD.map((spec) => {
     // HorizonView는 key('d1'/'d5')로 식별한다. spec.kind는 예측 레코드의 kind라 축이 다르다.
     const viewKey = Object.entries(KIND_OF).find(([, k]) => k === spec.kind)?.[0];
     const hz = signal.horizons.find((h) => h.key === viewKey);
     return {
       ...spec,
+      // 장중 레인의 방향은 일별 신호가 아니라 장중 읽기가 낸다. 보드에서는 마지막
+      // 기록된 예측의 방향을 그대로 보여준다 (없으면 빈칸).
       direction:
-        spec.status === 'live' && signal.signal && signal.signal.raw_direction
-          ? signal.signal.raw_direction === 'buy'
-            ? 'up'
-            : 'down'
-          : null,
+        spec.status !== 'live'
+          ? null
+          : spec.kind && INTRADAY_KINDS.includes(spec.kind)
+            ? null
+            : signal.signal?.raw_direction === 'buy'
+              ? 'up'
+              : signal.signal?.raw_direction === 'sell'
+                ? 'down'
+                : null,
       target: hz?.target_bucket ?? null,
-      record: spec.kind ? recordFor(spec.kind) : null,
+      record: spec.kind
+        ? INTRADAY_KINDS.includes(spec.kind)
+          ? intradayRecord(spec.kind)
+          : recordFor(spec.kind)
+        : null,
       daysTo30: tradingDaysTo30Samples(spec.tradingDays),
       position: spec.status === 'position_only' ? position : null,
     };
@@ -102,3 +141,6 @@ const KIND_OF: Record<string, string> = {
   d1: 'directional_1d',
   d5: 'directional',
 };
+
+/** 장중 레인은 장부(HORIZONS 기반)에 없어서 예측 테이블을 직접 센다. */
+const INTRADAY_KINDS = ['directional_h1', 'directional_d0'];

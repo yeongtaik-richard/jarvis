@@ -222,9 +222,18 @@ export type MarketEventQuery = z.infer<typeof MarketEventQuery>;
 
 // Predictions — 반증 가능한 조건 + 자동 채점. 방향성 '주장'이 아니라 '검증 대상 기록'.
 export const PredictionComparator = z.enum(['gt', 'gte', 'lt', 'lte']);
-// directional = 5거래일 지평(역사적 이유로 접미사 없음), directional_1d = 1거래일 지평.
-// 지평별로 레인을 나눠야 적중률이 섞이지 않는다 — stock-signal.ts HORIZONS 참고.
-export const PredictionKind = z.enum(['watch', 'directional', 'directional_1d']);
+// 지평별로 레인을 나눠야 적중률이 섞이지 않는다 (stock-signal.ts HORIZONS 참고).
+//   directional     = 5거래일 (역사적 이유로 접미사 없음)
+//   directional_1d  = 1거래일
+//   directional_h1  = 60분   ← 장중, 분봉으로 채점
+//   directional_d0  = 당일 마감 ← 장중, 지금 가격 대비
+export const PredictionKind = z.enum([
+  'watch',
+  'directional',
+  'directional_1d',
+  'directional_h1',
+  'directional_d0',
+]);
 export const PredictionStatus = z.enum([
   'pending',
   'confirmed',

@@ -29,7 +29,7 @@ info:
     그리고 방향은 결정론적 규칙 레인에서만 나온다 — AI 자유 텍스트는 규칙 신호를 인용할 수
     있을 뿐 스스로 방향을 지어내지 않으며, `validated_directional` claim_type은 거부(400)된다.
     적중률을 인용할 때는 표본 수와 기저율을 반드시 함께 말할 것.
-  version: '1.14.0'
+  version: '1.15.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production

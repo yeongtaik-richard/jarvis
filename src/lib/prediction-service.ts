@@ -105,6 +105,24 @@ export async function createPrediction(
  */
 export const scorePending = cache(scorePendingUncached);
 
+/**
+ * 페이로드에서 채점할 값을 꺼낸다.
+ *
+ * 보통은 `payload[field]`면 끝인데 **분봉만 예외**다. 분봉은 시간 버킷 한 행에 그 시간의
+ * 분봉 배열이 들어 있어서(하루 390행이 아니라 7행), 'HH:MM' 형태의 field는 그 배열
+ * 안에서 해당 분을 찾아야 한다. 1시간 지평이 "정확히 60분 뒤"로 채점되려면 이게 있어야
+ * 한다 — 시간 버킷 단위로 뭉뚱그리면 수집 지연만큼 지평이 흔들린다.
+ */
+function resolveField(payload: unknown, field: string): number {
+  const p = payload as Record<string, unknown> | null;
+  if (!p) return NaN;
+  if (/^\d{2}:\d{2}$/.test(field) && Array.isArray(p.bars)) {
+    const bar = (p.bars as Array<Record<string, unknown>>).find((b) => b.t === field);
+    return bar ? Number(bar.c) : NaN;
+  }
+  return Number(p[field]);
+}
+
 const CMP: Record<string, (v: number, t: number) => boolean> = {
   gt: (v, t) => v > t,
   gte: (v, t) => v >= t,
@@ -153,7 +171,7 @@ async function scorePendingUncached(symbol: string): Promise<number> {
     const snap = snapByKey.get(`${p.metric}\u0000${p.targetBucket}`);
 
     if (snap) {
-      const v = Number((snap.payload as Record<string, unknown>)[p.field]);
+      const v = resolveField(snap.payload, p.field);
       const cmp = CMP[p.comparator];
       if (!Number.isFinite(v) || !cmp) {
         await db
