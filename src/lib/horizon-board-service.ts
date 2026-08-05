@@ -159,4 +159,9 @@ const KIND_OF: Record<string, string> = {
 };
 
 /** 장중 레인은 장부(HORIZONS 기반)에 없어서 예측 테이블을 직접 센다. */
-const INTRADAY_KINDS = ['directional_h1', 'directional_d0'];
+const INTRADAY_KINDS = [
+  'directional_h1',
+  'directional_d0',
+  'directional_pm_open',
+  'directional_pm_close',
+];

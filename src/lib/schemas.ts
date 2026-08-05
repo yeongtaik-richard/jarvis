@@ -233,6 +233,8 @@ export const PredictionKind = z.enum([
   'directional_1d',
   'directional_h1',
   'directional_d0',
+  'directional_pm_open',  // 프리마켓 → 당일 시가
+  'directional_pm_close', // 프리마켓 → 당일 종가 (18:43 레인과 같은 대상)
 ]);
 export const PredictionStatus = z.enum([
   'pending',

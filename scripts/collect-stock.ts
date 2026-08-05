@@ -806,6 +806,24 @@ async function main(): Promise<void> {
     }
   }
 
+  // 5b) 프리마켓 예측 — 간밤 해외장으로 당일 시가·종가를 예측한다. 개장 전에만
+  //      기록되고, 서버가 09:00 이후 호출을 거절한다.
+  if (kind === 'premarket' && !backfill && posted > 0) {
+    try {
+      const res = await fetch(`${BASE}/api/stock/premarket-signal?symbol=${SYMBOL}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${apiToken}` },
+      });
+      const body = (await res.json()) as { direction?: string; lanes?: Array<{ kind: string; reason: string }> };
+      console.log(
+        `[collect] premarket-signal ${res.status} ${body.direction ?? '방향없음'} ` +
+          (body.lanes ?? []).map((l) => `${l.kind}=${l.reason}`).join(' '),
+      );
+    } catch (e) {
+      console.warn(`[collect] premarket-signal failed: ${String(e)}`);
+    }
+  }
+
   // 실패 종료는 맨 마지막. 여기까지 와야 부분 실패에도 신호가 기록된다.
   finishRun(errors);
 }
