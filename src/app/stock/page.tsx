@@ -6,6 +6,7 @@ import { getStockRegime } from '@/lib/stock-regime-service';
 import { predictionStats, searchPredictions, toApiPrediction } from '@/lib/prediction-service';
 import { getStockSignal } from '@/lib/stock-signal-service';
 import { getPredictionLedger } from '@/lib/prediction-ledger';
+import { computeIntradayRead, type IntradayBucket } from '@/lib/stock-intraday-read';
 import type { SignalSeriesPoint } from '@/lib/stock-signal';
 import { PredictionQuery } from '@/lib/schemas';
 import { MarketEventQuery, StockAnalysisQuery, StockSnapshotQuery } from '@/lib/schemas';
@@ -541,6 +542,7 @@ export default async function StockDashboardPage() {
   const [
     ohlcvRows,
     flowRows,
+    intradayRows,
     health,
     eventRows,
     regimeResult,
@@ -551,6 +553,7 @@ export default async function StockDashboardPage() {
   ] = await Promise.all([
     getStockHistory(symbol, 'daily_ohlcv', HISTORY_DAYS),
     getStockHistory(symbol, 'investor_flow', HISTORY_DAYS),
+    getStockHistory(symbol, 'intraday_price', 14),
     getCollectorHealth(symbol),
     searchMarketEvents(MarketEventQuery.parse({ symbol, limit: 15 })),
     getStockRegime(symbol),
@@ -632,6 +635,39 @@ export default async function StockDashboardPage() {
     };
   }
 
+  // ── 남은 시간 읽기. 장이 열려 있을 때만 — 장 끝난 뒤 "남은 시간"은 말이 안 된다.
+  const todayBuckets: IntradayBucket[] = marketOpen
+    ? intradayRows
+        .filter((r) => r.bucketKey.startsWith(todayKst))
+        .map((r) => {
+          const p = r.payload as Record<string, unknown>;
+          const num = (k: string) => {
+            const v = Number(p[k]);
+            return Number.isFinite(v) ? v : null;
+          };
+          return {
+            bucketKey: r.bucketKey,
+            price: num('price') ?? NaN,
+            changeRate: num('change_rate'),
+            open: num('open'),
+            high: num('high'),
+            low: num('low'),
+            programNetQty: num('program_net_qty'),
+            foreignNetQty: num('foreign_net_qty'),
+          };
+        })
+        .filter((b) => Number.isFinite(b.price))
+    : [];
+  // 오늘 장중 수급은 굳어 있을 때가 있어서, 확정된 어제 방향을 같이 재료로 쓴다.
+  const prevFlowRow = flowRows[flowRows.length - 1];
+  const prevFlowSum = prevFlowRow
+    ? payloadNum(prevFlowRow.payload, 'foreign_net') +
+      payloadNum(prevFlowRow.payload, 'institution_net')
+    : NaN;
+  const intradayRead = todayBuckets.length
+    ? computeIntradayRead(todayBuckets, Number.isFinite(prevFlowSum) ? prevFlowSum : null)
+    : null;
+
   return (
     <div className="min-h-screen">
       <Header />
@@ -667,10 +703,33 @@ export default async function StockDashboardPage() {
                 결정 기록
               </Link>
             </div>
-            {regimeResult.regime && (
-              <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                {regimeResult.regime.label} · {regimeResult.indicators?.as_of} 마감 기준
+            {/* 국면 줄은 뺐다 — 기준일이 달라(어제 마감) 현재가와 한 카드에 있으면
+                "오늘 +7%인데 하락 추세"처럼 모순으로 읽힌다. 국면은 자기 카드가 따로 있다. */}
+            {intradayRead ? (
+              <div className="mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-900">
+                <div className="text-sm">
+                  <span className="text-zinc-400">남은 시간 </span>
+                  {intradayRead.headline}
+                </div>
+                <div className="mt-1 text-[11px] text-zinc-400 tabular-nums">
+                  {intradayRead.factors.map((f) => f.text).join(' · ')}
+                </div>
+                {intradayRead.caveats.length > 0 && (
+                  <div className="mt-0.5 text-[11px] text-zinc-400">
+                    믿기 어려운 점: {intradayRead.caveats.join(' · ')}
+                  </div>
+                )}
+                <div className="mt-1 text-[11px] text-zinc-400">
+                  가격이 움직인 방향을 수급·위치가 받쳐주는지만 본다. 뉴스 호재·악재는 여기서
+                  판정하지 않고 아래 브리핑이 다룬다. 채점 대상이 아니다.
+                </div>
               </div>
+            ) : (
+              !marketOpen && (
+                <div className="mt-2 text-xs text-zinc-400">
+                  장이 열리면 남은 시간 읽기가 여기 표시된다.
+                </div>
+              )
             )}
           </section>
         )}
