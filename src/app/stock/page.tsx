@@ -65,6 +65,7 @@ function agoText(mins: number): string {
 
 const METRIC_LABEL: Record<string, string> = {
   investor_flow: '수급 · 투자자별 순매수',
+  investor_flow_intraday: '수급 · 오늘 장중 (잠정)',
   daily_ohlcv: '일봉 (OHLCV)',
   foreign_holding: '외국인 보유',
   intraday_price: '장중 현재가',
@@ -79,6 +80,9 @@ const METRIC_LABEL: Record<string, string> = {
  */
 const CARD_METRICS = [
   'intraday_price',
+  // 잠정이 확정보다 앞에 온다 — 장중에 보는 사람이 알고 싶은 건 오늘이고, 두 카드가
+  // 붙어 있어야 "오늘 잠정 vs 어제 확정"이 한눈에 대비된다.
+  'investor_flow_intraday',
   'investor_flow',
   'daily_ohlcv',
   'valuation',
@@ -138,6 +142,15 @@ function metricRows(item: ApiStockSnapshot): Row[] {
     return Number.isFinite(v) ? v : null;
   };
 
+  if (item.metric === 'investor_flow_intraday') {
+    const price = num('price');
+    return [
+      { label: '현재가', value: price === null ? '—' : won(price) },
+      flowRow('외국인', num('foreign_net'), num('foreign_buy'), num('foreign_sell')),
+      flowRow('기관', num('institution_net'), num('institution_buy'), num('institution_sell')),
+      flowRow('개인', num('individual_net'), num('individual_buy'), num('individual_sell')),
+    ];
+  }
   if (item.metric === 'investor_flow') {
     const close = num('close');
     return [
@@ -522,7 +535,14 @@ function cardBasis(i: ApiStockSnapshot): string {
   const d = i.trading_date_kst ?? i.bucket_key.slice(0, 10);
   if (i.metric === 'intraday_price') return `${d} 장중 누적 · 수량 기준`;
   if (i.metric === 'foreign_holding') return `${d} 기준`;
-  if (i.metric === 'investor_flow') return `${d} 마감 확정 · 대금 기준`;
+  if (i.metric === 'investor_flow_intraday') {
+    // 버킷 시각까지 보여준다 — 장중 값은 "몇 시 기준 누적"인지가 값 자체만큼 중요하다.
+    const hhmm = i.bucket_key.slice(11, 16);
+    return `${d}${hhmm ? ` ${hhmm}` : ''} 누적 · 대금 기준 · 장중 잠정`;
+  }
+  // '확정'이라고 쓰지 않는다: 8/10 행을 마감 후 재조회하니 기관/개인이 각각 7,100
+  // (백만원)씩 옮겨가 있었다. 마감 집계는 나중에 정정된다.
+  if (i.metric === 'investor_flow') return `${d} 마감 집계 · 대금 기준`;
   return `${d} 마감 확정`;
 }
 

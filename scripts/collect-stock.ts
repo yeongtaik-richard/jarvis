@@ -387,6 +387,56 @@ async function main(): Promise<void> {
         console.log(
           `[collect] intraday_price ${bucket}${afterCloseNow() ? ' (종가)' : ''} (${q.price}원, ${q.changeRate}%) + foreign_holding ${q.foreignRatio}%`,
         );
+
+        // 장중 수급 **잠정치**. `investorFlows`는 장중에도 오늘 행을 돌려주는데,
+        // 확정 레인(`investor_flow`)은 §확정 전 값 규칙으로 그걸 버린다. 여기서
+        // **별도 metric**으로 받아 둔다 — 같은 칸에 넣으면 백테스트가 그날 장중에는
+        // 알 수 없었던 값을 읽게 되고(룩어헤드), 확정치와의 오차도 영영 못 잰다.
+        //
+        // 버킷은 시간별이다. 일별로 덮어쓰면 "외국인이 오전 내내 사다가 오후에
+        // 돌아섰다" 같은 **궤적**이 사라지는데, 장중에 알고 싶은 건 사실상 그것뿐이다.
+        //
+        // 확정이 아니라는 증거: 8/10 행을 마감 후 재조회하니 기관/개인이 각각
+        // 7,100(백만원)씩 옮겨가 있었다. 잠정↔확정 오차는 이 두 metric을 나란히
+        // 놓아야만 측정된다.
+        try {
+          const flows = await investorFlows(kisToken, creds, SYMBOL);
+          const todayFlow = flows.find((f) => ymd(f.date) === today.dashed);
+          if (!todayFlow) {
+            console.log('[collect] investor_flow_intraday: 오늘 행이 응답에 없음');
+          } else {
+            queue.push({
+              symbol: SYMBOL,
+              source: 'kis',
+              metric: 'investor_flow_intraday',
+              bucket_key: bucket,
+              trading_date_kst: today.dashed,
+              as_of_at: at.toISOString(),
+              collector_run_id: runId,
+              payload: {
+                // 확정 레인의 `close`와 같은 필드(stck_clpr)지만 장중엔 현재가다.
+                // 이름을 맞추면 종가로 오독되므로 일부러 다르게 둔다.
+                price: todayFlow.close,
+                provisional: true,
+                amount_unit: 'million_krw',
+                foreign_net: todayFlow.frgnNet,
+                institution_net: todayFlow.orgnNet,
+                individual_net: todayFlow.prsnNet,
+                foreign_buy: todayFlow.frgnBuy,
+                foreign_sell: todayFlow.frgnSell,
+                institution_buy: todayFlow.orgnBuy,
+                institution_sell: todayFlow.orgnSell,
+                individual_buy: todayFlow.prsnBuy,
+                individual_sell: todayFlow.prsnSell,
+              },
+            });
+            console.log(
+              `[collect] investor_flow_intraday ${bucket} 외국인 ${todayFlow.frgnNet} 기관 ${todayFlow.orgnNet} 개인 ${todayFlow.prsnNet} (백만원, 잠정)`,
+            );
+          }
+        } catch (e) {
+          errors.push(`investor_flow_intraday: ${String(e)}`);
+        }
       }
     } catch (e) {
       errors.push(`intraday_price: ${String(e)}`);
