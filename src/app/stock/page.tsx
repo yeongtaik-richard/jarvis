@@ -544,6 +544,9 @@ function cardBasis(i: ApiStockSnapshot): string {
   const d = i.trading_date_kst ?? i.bucket_key.slice(0, 10);
   if (i.metric === 'intraday_price') return `${d} 장중 누적 · 수량 기준`;
   if (i.metric === 'foreign_holding') return `${d} 기준`;
+  // 밸류에이션은 현재가에서 파생돼 장중 매 수집마다 갱신된다. 기본 분기의 '마감 확정'을
+  // 물려받으면 10시에 찍힌 PER이 마감값으로 읽힌다 — 조회 시각을 그대로 쓴다.
+  if (i.metric === 'valuation') return `${kstTime(i.as_of_at)} 기준 · 현재가에서 계산`;
   if (i.metric === 'investor_flow_estimate') {
     // 버킷 시각까지 보여준다 — 장중 값은 "몇 시 기준"인지가 값 자체만큼 중요하다.
     const hhmm = i.bucket_key.slice(11, 16);
