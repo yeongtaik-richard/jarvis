@@ -65,7 +65,7 @@ function agoText(mins: number): string {
 
 const METRIC_LABEL: Record<string, string> = {
   investor_flow: '수급 · 투자자별 순매수',
-  investor_flow_intraday: '수급 · 오늘 장중 (잠정)',
+  investor_flow_estimate: '수급 · 오늘 장중 추정',
   daily_ohlcv: '일봉 (OHLCV)',
   foreign_holding: '외국인 보유',
   intraday_price: '장중 현재가',
@@ -80,9 +80,9 @@ const METRIC_LABEL: Record<string, string> = {
  */
 const CARD_METRICS = [
   'intraday_price',
-  // 잠정이 확정보다 앞에 온다 — 장중에 보는 사람이 알고 싶은 건 오늘이고, 두 카드가
-  // 붙어 있어야 "오늘 잠정 vs 어제 확정"이 한눈에 대비된다.
-  'investor_flow_intraday',
+  // 추정이 확정보다 앞에 온다 — 장중에 보는 사람이 알고 싶은 건 오늘이고, 두 카드가
+  // 붙어 있어야 "오늘 추정 vs 어제 확정"이 한눈에 대비된다.
+  'investor_flow_estimate',
   'investor_flow',
   'daily_ohlcv',
   'valuation',
@@ -142,13 +142,22 @@ function metricRows(item: ApiStockSnapshot): Row[] {
     return Number.isFinite(v) ? v : null;
   };
 
-  if (item.metric === 'investor_flow_intraday') {
+  if (item.metric === 'investor_flow_estimate') {
     const price = num('price');
+    const n = num('bucket_count');
     return [
       { label: '현재가', value: price === null ? '—' : won(price) },
-      flowRow('외국인', num('foreign_net'), num('foreign_buy'), num('foreign_sell')),
-      flowRow('기관', num('institution_net'), num('institution_buy'), num('institution_sell')),
-      flowRow('개인', num('individual_net'), num('individual_buy'), num('individual_sell')),
+      flowQtyRow('외국인', num('foreign_qty')),
+      flowQtyRow('기관', num('institution_qty')),
+      flowQtyRow('둘 합계', num('sum_qty')),
+      // 개인이 없다는 걸 카드가 스스로 말해야 한다. 확정 카드에는 개인 줄이 있어서,
+      // 여기서 비워두면 "개인이 0"으로 읽힌다.
+      { label: '개인', value: '장중 미제공', tone: 'neutral' },
+      {
+        label: '발표 구간',
+        value: n === null ? '—' : `${n}개`,
+        sub: '장중에 구간이 늘어난다',
+      },
     ];
   }
   if (item.metric === 'investor_flow') {
@@ -535,10 +544,12 @@ function cardBasis(i: ApiStockSnapshot): string {
   const d = i.trading_date_kst ?? i.bucket_key.slice(0, 10);
   if (i.metric === 'intraday_price') return `${d} 장중 누적 · 수량 기준`;
   if (i.metric === 'foreign_holding') return `${d} 기준`;
-  if (i.metric === 'investor_flow_intraday') {
-    // 버킷 시각까지 보여준다 — 장중 값은 "몇 시 기준 누적"인지가 값 자체만큼 중요하다.
+  if (i.metric === 'investor_flow_estimate') {
+    // 버킷 시각까지 보여준다 — 장중 값은 "몇 시 기준"인지가 값 자체만큼 중요하다.
     const hhmm = i.bucket_key.slice(11, 16);
-    return `${d}${hhmm ? ` ${hhmm}` : ''} 누적 · 대금 기준 · 장중 잠정`;
+    // '추정'을 두 번 쓴다(제목·기준선). 확정 카드와 나란히 놓이는 자리라 한 번은
+    // 스크롤에 묻힌다. 방향만 읽고 크기는 믿지 말라는 게 이 줄의 일이다.
+    return `${d}${hhmm ? ` ${hhmm}` : ''} · 수량 기준 · 외국인·기관 추정(가집계)`;
   }
   // '확정'이라고 쓰지 않는다: 8/10 행을 마감 후 재조회하니 기관/개인이 각각 7,100
   // (백만원)씩 옮겨가 있었다. 마감 집계는 나중에 정정된다.
@@ -1426,7 +1437,11 @@ export default async function StockDashboardPage() {
 
         <p className="text-[11px] text-zinc-400 pt-2">
           수급은 KIS의 투자자별 매매대금이다. 순매수는 매수에서 매도를 뺀 값이고, 마감 후
-          하루 한 번 모은다. 빨강이 상승·순매수, 파랑이 하락·순매도다(국내 관례).
+          하루 한 번 모은다. 빨강이 상승·순매수, 파랑이 하락·순매도다(국내 관례). 마감 집계는
+          다음날 아침에 한 번 더 받아 정정을 반영한다 — 8/10 기관·개인이 각 7,100(백만원)씩
+          옮겨간 적이 있다. <strong>장중 추정 카드는 다른 물건이다</strong>: 대금이 아니라
+          수량, 개인 없이 외국인·기관만, 그리고 가집계다. 8/11 마감 구간은 외국인 −345,000주로
+          나왔는데 확정치는 −2,998억(≈ −21만주)이었다 — 방향만 읽고 크기는 믿지 말 것.
         </p>
       </main>
     </div>

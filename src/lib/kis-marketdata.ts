@@ -75,9 +75,61 @@ export interface InvestorFlow {
   orgnSell: number;
 }
 
+/** One published estimate point within today's session. */
+export interface InvestorEstimateBucket {
+  /** KIS `bsop_hour_gb` — the publish slot, ascending through the session. */
+  seq: number;
+  /** Estimated net buy in SHARES (not amount). Foreign / institution only. */
+  foreignQty: number;
+  institutionQty: number;
+  sumQty: number;
+}
+
+/**
+ * Intraday 외국인·기관 net-buy ESTIMATE, in shares, per publish slot.
+ *
+ * This is the only per-stock flow KIS serves while the session is open —
+ * `investorFlows` (FHKST01010900) carries nothing for today until after the
+ * close. The tradeoffs are real and must survive to the screen: no 개인, shares
+ * rather than amount, and the field name is literally `frgn_fake_ntby_qty`
+ * (가집계). On 2026-08-11 the final slot read −345,000 shares against a settled
+ * −299,781 백만원 (≈ −210,000 shares) — the estimate is the right sign but not
+ * the right size, so read direction from it, never magnitude.
+ *
+ * Slots are returned newest-first and are NOT normalized here: whether a slot
+ * is cumulative or per-interval is unverified, so the caller stores the whole
+ * array and lets accumulated observations answer that.
+ */
+export async function investorTrendEstimate(
+  token: string,
+  creds: KisCreds,
+  code: string,
+): Promise<InvestorEstimateBucket[]> {
+  const body = await kisGet<{ output2?: Record<string, string>[] }>(
+    token,
+    creds,
+    '/uapi/domestic-stock/v1/quotations/investor-trend-estimate',
+    'HHPTJ04160200',
+    { MKSC_SHRN_ISCD: code },
+  );
+  return (body.output2 ?? [])
+    .filter((o) => o.bsop_hour_gb)
+    .map((o) => ({
+      seq: num(o.bsop_hour_gb),
+      foreignQty: num(o.frgn_fake_ntby_qty),
+      institutionQty: num(o.orgn_fake_ntby_qty),
+      sumQty: num(o.sum_fake_ntby_qty),
+    }))
+    .sort((a, b) => a.seq - b.seq);
+}
+
 /**
  * Daily buy/sell/net trading amount (백만원) by 개인/외국인/기관, newest-first,
  * settled days only. `_shnu_` = 매수, `_seln_` = 매도, `_ntby_` = 순매수.
+ *
+ * Note: the response carries NO row for today while the session is open — the
+ * earliest it appears is after the close. Intraday callers want
+ * `investorTrendEstimate` instead.
  */
 export async function investorFlows(
   token: string,

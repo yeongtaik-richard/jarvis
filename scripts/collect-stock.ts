@@ -36,6 +36,7 @@ import {
   overseasStockDaily,
   foreignHolding,
   investorFlows,
+  investorTrendEstimate,
   issueToken,
   type KisCreds,
 } from '../src/lib/kis-marketdata';
@@ -388,54 +389,55 @@ async function main(): Promise<void> {
           `[collect] intraday_price ${bucket}${afterCloseNow() ? ' (종가)' : ''} (${q.price}원, ${q.changeRate}%) + foreign_holding ${q.foreignRatio}%`,
         );
 
-        // 장중 수급 **잠정치**. `investorFlows`는 장중에도 오늘 행을 돌려주는데,
-        // 확정 레인(`investor_flow`)은 §확정 전 값 규칙으로 그걸 버린다. 여기서
-        // **별도 metric**으로 받아 둔다 — 같은 칸에 넣으면 백테스트가 그날 장중에는
-        // 알 수 없었던 값을 읽게 되고(룩어헤드), 확정치와의 오차도 영영 못 잰다.
+        // 장중 수급 **추정치**. 확정 레인(`investor_flow`)이 쓰는 FHKST01010900은
+        // 장중에 오늘 행을 아예 주지 않아서(2026-08-12 10:34 실측: 최신 행이 8/11),
+        // 장중에 답을 낼 수 있는 소스는 이 가집계뿐이다.
         //
-        // 버킷은 시간별이다. 일별로 덮어쓰면 "외국인이 오전 내내 사다가 오후에
-        // 돌아섰다" 같은 **궤적**이 사라지는데, 장중에 알고 싶은 건 사실상 그것뿐이다.
+        // **별도 metric인 이유**: 스키마부터 다르다 — 개인이 없고, 대금이 아니라
+        // 수량이고, 추정이다. 확정 칸에 섞으면 백테스트가 그날 장중엔 알 수 없었던
+        // 값을 읽게 되고(룩어헤드) 추정↔확정 오차도 못 잰다.
         //
-        // 확정이 아니라는 증거: 8/10 행을 마감 후 재조회하니 기관/개인이 각각
-        // 7,100(백만원)씩 옮겨가 있었다. 잠정↔확정 오차는 이 두 metric을 나란히
-        // 놓아야만 측정된다.
+        // 버킷은 시간별이다. 일별로 덮어쓰면 "외국인이 오전 내내 팔다가 돌아섰다"
+        // 같은 **궤적**이 사라지는데, 장중에 알고 싶은 건 사실상 그것뿐이다.
         try {
-          const flows = await investorFlows(kisToken, creds, SYMBOL);
-          const todayFlow = flows.find((f) => ymd(f.date) === today.dashed);
-          if (!todayFlow) {
-            console.log('[collect] investor_flow_intraday: 오늘 행이 응답에 없음');
+          const est = await investorTrendEstimate(kisToken, creds, SYMBOL);
+          const last = est[est.length - 1];
+          if (!last) {
+            console.log('[collect] investor_flow_estimate: 아직 발표된 구간이 없음');
           } else {
             queue.push({
               symbol: SYMBOL,
               source: 'kis',
-              metric: 'investor_flow_intraday',
+              metric: 'investor_flow_estimate',
               bucket_key: bucket,
               trading_date_kst: today.dashed,
               as_of_at: at.toISOString(),
               collector_run_id: runId,
               payload: {
-                // 확정 레인의 `close`와 같은 필드(stck_clpr)지만 장중엔 현재가다.
-                // 이름을 맞추면 종가로 오독되므로 일부러 다르게 둔다.
-                price: todayFlow.close,
-                provisional: true,
-                amount_unit: 'million_krw',
-                foreign_net: todayFlow.frgnNet,
-                institution_net: todayFlow.orgnNet,
-                individual_net: todayFlow.prsnNet,
-                foreign_buy: todayFlow.frgnBuy,
-                foreign_sell: todayFlow.frgnSell,
-                institution_buy: todayFlow.orgnBuy,
-                institution_sell: todayFlow.orgnSell,
-                individual_buy: todayFlow.prsnBuy,
-                individual_sell: todayFlow.prsnSell,
+                estimate: true,
+                qty_unit: 'share', // 확정 레인은 백만원 — 절대 섞지 말 것
+                price: q.price,
+                // 구간 배열을 통째로 남긴다. 각 구간이 누적인지 구간별인지 아직
+                // 검증되지 않아서, 여기서 정규화하면 틀린 해석이 데이터에 박힌다.
+                // 며칠 쌓이면 배열 자체가 답을 준다.
+                buckets: est.map((b) => ({
+                  seq: b.seq,
+                  foreign: b.foreignQty,
+                  institution: b.institutionQty,
+                  sum: b.sumQty,
+                })),
+                bucket_count: est.length,
+                foreign_qty: last.foreignQty,
+                institution_qty: last.institutionQty,
+                sum_qty: last.sumQty,
               },
             });
             console.log(
-              `[collect] investor_flow_intraday ${bucket} 외국인 ${todayFlow.frgnNet} 기관 ${todayFlow.orgnNet} 개인 ${todayFlow.prsnNet} (백만원, 잠정)`,
+              `[collect] investor_flow_estimate ${bucket} 구간 ${est.length}개 · 외국인 ${last.foreignQty} 기관 ${last.institutionQty} (주, 추정)`,
             );
           }
         } catch (e) {
-          errors.push(`investor_flow_intraday: ${String(e)}`);
+          errors.push(`investor_flow_estimate: ${String(e)}`);
         }
       }
     } catch (e) {
