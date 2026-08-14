@@ -111,6 +111,17 @@ export const ImprovementSearchQuery = z.object({
 });
 export type ImprovementSearchQuery = z.infer<typeof ImprovementSearchQuery>;
 
+/**
+ * 서비스 토큰 캐시 저장 입력. `ciphertext`는 서버가 해석하지 않는 불투명 문자열이다 —
+ * 복호화 키는 수집기에만 있고, 서버가 열 수 있으면 캐시를 두는 의미가 없어진다.
+ */
+export const PutServiceTokenInput = z.object({
+  ciphertext: z.string().min(1).max(4000),
+  key_fingerprint: z.string().min(1).max(64),
+  expires_at: z.string().datetime({ offset: true }),
+});
+export type PutServiceTokenInput = z.infer<typeof PutServiceTokenInput>;
+
 // Stock reference-info snapshots (aggregator). API fields are snake_case.
 export const CreateStockSnapshotInput = z.object({
   symbol: z.string().min(1).max(20),

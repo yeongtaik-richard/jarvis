@@ -12,7 +12,17 @@ export interface KisCreds {
   appSecret: string;
 }
 
-export async function issueToken(creds: KisCreds): Promise<string> {
+export interface KisToken {
+  token: string;
+  /** epoch ms. 캐시가 이 값으로 재사용 여부를 정한다. */
+  expiresAt: number;
+}
+
+/**
+ * 접근 토큰 발급. **KIS는 발급할 때마다 사용자에게 알림을 보내므로** 직접 부르지 말고
+ * `kis-token-cache.getKisToken`을 쓸 것 — 토큰은 24시간짜리라 실행마다 받을 이유가 없다.
+ */
+export async function issueToken(creds: KisCreds): Promise<KisToken> {
   const res = await fetch(`${REAL_BASE}/oauth2/tokenP`, {
     method: 'POST',
     headers: { 'content-type': 'application/json; charset=utf-8' },
@@ -22,11 +32,17 @@ export async function issueToken(creds: KisCreds): Promise<string> {
       appsecret: creds.appSecret,
     }),
   });
-  const body = (await res.json()) as { access_token?: string; error_description?: string };
+  const body = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    error_description?: string;
+  };
   if (!res.ok || !body.access_token) {
     throw new Error(`KIS token failed: ${res.status} ${body.error_description ?? ''}`);
   }
-  return body.access_token;
+  // expires_in은 초. 안 오면 24시간으로 가정하되, 캐시 쪽 여유(30분)가 오차를 흡수한다.
+  const ttl = Number.isFinite(body.expires_in) ? Number(body.expires_in) : 86_400;
+  return { token: body.access_token, expiresAt: Date.now() + ttl * 1000 };
 }
 
 async function kisGet<T>(

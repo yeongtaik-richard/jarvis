@@ -192,6 +192,23 @@ export const collectorRuns = pgTable(
   ],
 );
 
+/**
+ * 외부 서비스 접근 토큰 캐시. 지금은 KIS 하나뿐이다.
+ *
+ * 서버는 **암호문만** 들고 있다. KIS 접근 토큰은 주문 권한이 있어서 평문으로 두면
+ * 앱키를 Vercel에 두지 않는다는 제약이 무의미해진다. 복호화 키는 KIS_APP_SECRET에서
+ * 파생되고 그건 수집기에만 있다.
+ */
+export const serviceTokens = pgTable('service_tokens', {
+  name: text('name').primaryKey(),
+  /** base64(iv | authTag | ciphertext) */
+  ciphertext: text('ciphertext').notNull(),
+  /** 어느 앱키로 받은 토큰인가 — 키 교체 시 복호화 없이 무효 판정 */
+  keyFingerprint: text('key_fingerprint').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // 공시·뉴스 이벤트. 스냅샷과 달리 한 시점에 여러 건이 흐르므로 별도 테이블이다.
 // 멱등키는 (source, external_id) — 공시 rcept_no, 뉴스 링크.
 export const marketEvents = pgTable(

@@ -37,9 +37,9 @@ import {
   foreignHolding,
   investorFlows,
   investorTrendEstimate,
-  issueToken,
   type KisCreds,
 } from '../src/lib/kis-marketdata';
+import { getKisToken } from '../src/lib/kis-token-cache';
 import { fetchDartDisclosures, fetchNewsHeadlines } from '../src/lib/market-sources';
 
 const SYMBOL = process.env.STOCK_SYMBOL ?? '000660'; // SK hynix
@@ -270,7 +270,10 @@ async function main(): Promise<void> {
     finished: false,
   });
 
-  const kisToken = await issueToken(creds);
+  // 캐시 우선. KIS는 토큰을 발급할 때마다 사용자에게 카카오톡 알림을 보내는데,
+  // 하루 14~16회 도는 수집기가 실행마다 발급받고 있었다. 토큰은 24시간짜리다.
+  const { token: kisToken, reused } = await getKisToken(creds, BASE, apiToken);
+  console.log(`[collect] kis token ${reused ? '캐시 재사용' : '새로 발급'}`);
   const today = kstDay();
   const cutoff = kstDay(backfill).dashed; // only used in backfill mode
   const errors: string[] = [];
