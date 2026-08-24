@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { withRetry } from './retry';
 
 /**
  * 이벤트(공시·뉴스) 수집 소스. **읽기 전용 HTTP만** 한다.
@@ -46,12 +47,15 @@ export async function fetchDartDisclosures(
   url.searchParams.set('end_de', kstCompact(0));
   url.searchParams.set('page_count', '100');
 
-  const res = await fetch(url);
-  const body = (await res.json()) as {
-    status?: string;
-    message?: string;
-    list?: Record<string, string>[];
-  };
+  const body = await withRetry('DART list', async () => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`DART list http ${res.status}`);
+    return (await res.json()) as {
+      status?: string;
+      message?: string;
+      list?: Record<string, string>[];
+    };
+  });
   // 013 = 조회된 데이터 없음. 에러가 아니다.
   if (body.status === '013') return [];
   if (body.status !== '000') {
@@ -89,9 +93,12 @@ export async function fetchNewsHeadlines(
   url.searchParams.set('gl', 'KR');
   url.searchParams.set('ceid', 'KR:ko');
 
-  const res = await fetch(url, { headers: { 'user-agent': 'jarvis-collector' } });
-  if (!res.ok) throw new Error(`news rss failed: ${res.status}`);
-  const xml = await res.text();
+  const xml = await withRetry('news rss', async () => {
+    const res = await fetch(url, { headers: { 'user-agent': 'jarvis-collector' } });
+    // 'http <코드>' 형태 — 재시도 분류기가 이 모양으로 상태 코드를 읽는다 (retry.ts).
+    if (!res.ok) throw new Error(`news rss http ${res.status}`);
+    return res.text();
+  });
 
   const pick = (block: string, tag: string): string | null => {
     const m = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`).exec(block);

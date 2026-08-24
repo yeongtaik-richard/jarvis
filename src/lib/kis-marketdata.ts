@@ -5,6 +5,8 @@
  * still order-capable, so keep it in GitHub Secrets only, never in Vercel env.
  */
 
+import { withRetry } from './retry';
+
 const REAL_BASE = 'https://openapi.koreainvestment.com:9443';
 
 export interface KisCreds {
@@ -23,15 +25,23 @@ export interface KisToken {
  * `kis-token-cache.getKisToken`을 쓸 것 — 토큰은 24시간짜리라 실행마다 받을 이유가 없다.
  */
 export async function issueToken(creds: KisCreds): Promise<KisToken> {
-  const res = await fetch(`${REAL_BASE}/oauth2/tokenP`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-    body: JSON.stringify({
-      grant_type: 'client_credentials',
-      appkey: creds.appKey,
-      appsecret: creds.appSecret,
-    }),
-  });
+  // `only: 'network'` — 요청이 KIS에 닿지 못한 경우만 다시 던진다. 서버가 응답했다면
+  // 발급이 일어났을 수 있고, 그러면 재시도가 알림을 한 통 더 만든다. 발급 자체에도
+  // 분당 제한이 있어서 무턱대고 재시도하면 오히려 막힌다.
+  const res = await withRetry(
+    'KIS tokenP',
+    () =>
+      fetch(`${REAL_BASE}/oauth2/tokenP`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({
+          grant_type: 'client_credentials',
+          appkey: creds.appKey,
+          appsecret: creds.appSecret,
+        }),
+      }),
+    { only: 'network' },
+  );
   const body = (await res.json()) as {
     access_token?: string;
     expires_in?: number;
@@ -45,6 +55,11 @@ export async function issueToken(creds: KisCreds): Promise<KisToken> {
   return { token: body.access_token, expiresAt: Date.now() + ttl * 1000 };
 }
 
+/**
+ * 조회는 전부 이걸 지나간다. 여기 하나에 재시도를 걸어두면 KIS 호출 전체가 덮인다 —
+ * 러너에서 한국 호스트로 나가는 연결이 가끔 끊기는데, 그때마다 실행이 통째로 죽고
+ * 있었다 (retry.ts 참고).
+ */
 async function kisGet<T>(
   token: string,
   creds: KisCreds,
@@ -54,21 +69,36 @@ async function kisGet<T>(
 ): Promise<T> {
   const url = new URL(REAL_BASE + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url, {
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      authorization: `Bearer ${token}`,
-      appkey: creds.appKey,
-      appsecret: creds.appSecret,
-      tr_id: trId,
-      custtype: 'P',
-    },
+  return withRetry(`KIS ${trId}`, async () => {
+    const res = await fetch(url, {
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        authorization: `Bearer ${token}`,
+        appkey: creds.appKey,
+        appsecret: creds.appSecret,
+        tr_id: trId,
+        custtype: 'P',
+      },
+    });
+    // 상태를 먼저 본다. 502를 그대로 json()에 넘기면 SyntaxError로 둔갑해서, 재시도할
+    // 가치가 있는 실패인지 판정할 수 없게 된다. 본문에 설명이 있으면 같이 실어 보낸다 —
+    // 상태 코드만 남기면 4xx일 때 원인을 알 수 없다.
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      let msg = '';
+      try {
+        msg = (JSON.parse(detail) as { msg1?: string }).msg1 ?? '';
+      } catch {
+        msg = detail.slice(0, 120);
+      }
+      throw new Error(`KIS ${trId} http ${res.status}${msg ? ` ${msg}` : ''}`);
+    }
+    const body = (await res.json()) as T & { rt_cd?: string; msg1?: string };
+    if (body.rt_cd && body.rt_cd !== '0') {
+      throw new Error(`KIS ${trId} error: ${body.msg1 ?? body.rt_cd}`);
+    }
+    return body;
   });
-  const body = (await res.json()) as T & { rt_cd?: string; msg1?: string };
-  if (body.rt_cd && body.rt_cd !== '0') {
-    throw new Error(`KIS ${trId} error: ${body.msg1 ?? body.rt_cd}`);
-  }
-  return body;
 }
 
 const num = (v: string | undefined): number => {
