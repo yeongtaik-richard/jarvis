@@ -640,13 +640,19 @@ export async function domesticBusinessDays(
   token: string,
   creds: KisCreds,
   fromYmd: string, // YYYYMMDD
+  /**
+   * 받아올 페이지 수. 한 페이지가 약 한 달치라, **"오늘 장이 열리나"만 알면 되는
+   * 호출은 1로 준다** — 장중 매시 실행이 4페이지씩 받으면 하루 32번의 낭비다.
+   */
+  opts: { maxPages?: number } = {},
 ): Promise<BusinessDay[]> {
+  const maxPages = opts.maxPages ?? 4;
   const out: BusinessDay[] = [];
   let ctxArea = '';
   let ctxKey = '';
   // 한 번에 최대 약 한 달치라 연속조회로 채운다. 지평 계산엔 2주면 충분하지만
   // 여유를 둔다 — 호출은 하루 한 번뿐이다.
-  for (let page = 0; page < 4; page++) {
+  for (let page = 0; page < maxPages; page++) {
     const body = await kisGet<{
       output?: Array<{ bass_dt?: string; opnd_yn?: string; bzdy_yn?: string }>;
       ctx_area_fk?: string;

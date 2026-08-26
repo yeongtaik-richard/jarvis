@@ -117,6 +117,38 @@ export function afterCloseNow(now = Date.now()): boolean {
 }
 
 /**
+ * 오늘 증시가 열리는가. **휴장일에 장중 수집을 돌리면 직전 장의 값이 오늘 것처럼 쌓인다.**
+ *
+ * 2026-08-17(광복절 대체공휴일)에 실제로 그랬다: `intraday_price` 6개 버킷이 전부
+ * `1,645,000 · +3.26% · 4,520,990주`로, 08-14 종가의 복사본이었다. `investor_flow_estimate`도
+ * 08-14 값이 08-17 버킷에 들어갔다. `intradayCollectable`이 요일만 보고 휴장일을 안 봤다.
+ * (그날 예측이 안 만들어진 건 `computeIntradayRead`의 굳은 값 가드 덕이지, 이 층이
+ * 막아서가 아니다 — 가드는 최후의 방어선이고 애초에 안 쌓는 게 맞다.)
+ *
+ * **판정을 못 하면 수집한다.** 달력 조회가 실패했다고 정상 거래일의 표본을 버리는 쪽이
+ * 휴장일에 한 줄 더 쌓는 것보다 나쁘다.
+ */
+async function marketOpenToday(
+  token: string,
+  creds: KisCreds,
+  today: { compact: string; dashed: string },
+): Promise<boolean> {
+  try {
+    // 1페이지면 충분하다 — 오늘부터 시작하는 응답이라 첫 장에 오늘이 있다.
+    const days = await domesticBusinessDays(token, creds, today.compact, { maxPages: 1 });
+    const row = days.find((d) => d.date === today.dashed);
+    if (!row) {
+      console.warn('[collect] 휴장일 판정: 달력에 오늘이 없다 — 수집을 진행한다');
+      return true;
+    }
+    return row.openMarket;
+  } catch (e) {
+    console.warn(`[collect] 휴장일 판정 실패, 수집을 진행한다: ${String(e)}`);
+    return true;
+  }
+}
+
+/**
  * 인트라데이 버킷 = KST 정시(`YYYY-MM-DDTHH:00+09:00`). cron이 늦게 떠도 "그 시각대 1건"으로
  * 멱등하게 덮어쓴다. 실제 조회 시각은 `as_of_at`에 따로 남기니 정보가 사라지진 않는다.
  */
@@ -298,6 +330,8 @@ async function main(): Promise<void> {
     try {
       if (!intradayCollectable()) {
         console.log('[collect] intraday: 수집 창(09:00~16:30 KST) 밖이라 수집하지 않음');
+      } else if (!(await marketOpenToday(kisToken, creds, today))) {
+        console.log('[collect] intraday: 오늘은 휴장일이라 수집하지 않음');
       } else {
         const at = new Date();
         const q = await currentQuote(kisToken, creds, SYMBOL);
