@@ -4,7 +4,7 @@ import { stockPredictions } from '@/db/schema';
 import { createPrediction, toApiPrediction, type ApiPrediction } from './prediction-service';
 import { HttpError } from './errors';
 import {
-  CHALLENGER_HORIZONS,
+  variantsFor,
   computeRegimeBreakdown,
   computeSignal,
   computeSignalBacktest,
@@ -61,7 +61,7 @@ export type HorizonView = {
    */
   blocked: DirectionalStats;
   /** 병행 기록 중인 후보 규칙의 실전 성적 (없으면 null) */
-  challenger: { key: string; label: string; live: DirectionalStats } | null;
+  challengers: { key: string; label: string; live: DirectionalStats }[];
 };
 
 export type DirectionalStats = {
@@ -72,6 +72,12 @@ export type DirectionalStats = {
   unverifiable: number;
   scored: number;
   hit_rate: number | null;
+  /**
+   * 이 레인이 **어느 쪽으로 얼마나 불렀나**. 적중률만으로는 안 보이는 것을 본다 —
+   * 2026-08 `directional_1d`는 24건 전부 하방이었는데 적중률 35%라는 숫자는 그걸
+   * 감췄다. `up_share`가 0이나 1이면 규칙이 한쪽에 갇혀 예측이 아니라 상수다.
+   */
+  calls: { n: number; up: number; down: number; up_share: number | null };
 };
 
 export type SignalResult = {
@@ -130,7 +136,11 @@ async function directionalStats(
     : sql`${stockPredictions.context} ->> 'passed' = 'false'`;
   const variantExpr = sql`coalesce(${stockPredictions.context} ->> 'variant', 'champion') = ${variant}`;
   const rows = await db
-    .select({ status: stockPredictions.status, n: sql<number>`count(*)::int` })
+    .select({
+      status: stockPredictions.status,
+      comparator: stockPredictions.comparator,
+      n: sql<number>`count(*)::int`,
+    })
     .from(stockPredictions)
     .where(
       and(
@@ -140,10 +150,14 @@ async function directionalStats(
         variantExpr,
       ),
     )
-    .groupBy(stockPredictions.status);
-  const count = (st: string) => rows.find((r) => r.status === st)?.n ?? 0;
+    .groupBy(stockPredictions.status, stockPredictions.comparator);
+  const count = (st: string) => rows.filter((r) => r.status === st).reduce((a, r) => a + r.n, 0);
   const confirmed = count('confirmed');
   const refuted = count('refuted');
+  // 방향 균형은 **채점 여부와 무관하게** 센다 — 아직 대기 중인 예측도 "무슨 방향을
+  // 냈는지"는 이미 정해져 있고, 한쪽 쏠림은 그 표본까지 넣어야 빨리 드러난다.
+  const up = rows.filter((r) => r.comparator === 'gt').reduce((a, r) => a + r.n, 0);
+  const down = rows.filter((r) => r.comparator !== 'gt').reduce((a, r) => a + r.n, 0);
   return {
     pending: count('pending'),
     confirmed,
@@ -153,11 +167,15 @@ async function directionalStats(
     scored: confirmed + refuted,
     hit_rate:
       confirmed + refuted > 0 ? Number((confirmed / (confirmed + refuted)).toFixed(3)) : null,
+    calls: {
+      n: up + down,
+      up,
+      down,
+      up_share: up + down > 0 ? Number((up / (up + down)).toFixed(3)) : null,
+    },
   };
 }
 
-/** 병행 기록할 후보 (지금은 하나). champion은 현행 규칙이라 별도 기록이 없다. */
-const CHALLENGER = SIGNAL_VARIANTS.find((v) => v.key !== 'champion')!;
 
 const num = (payload: unknown, key: string): number => {
   const v = Number((payload as Record<string, unknown> | null)?.[key]);
@@ -228,13 +246,15 @@ async function computeSignalResult(symbol: string): Promise<SignalComputation> {
         backtest: computeSignalBacktest(series, bars, h.trading_days),
         live: await directionalStats(symbol, h.kind, true),
         blocked: await directionalStats(symbol, h.kind, false),
-        challenger: CHALLENGER_HORIZONS.includes(h.key)
-          ? {
-              key: CHALLENGER.key,
-              label: CHALLENGER.label,
-              live: await directionalStats(symbol, h.kind, true, CHALLENGER.key),
-            }
-          : null,
+        challengers: await Promise.all(
+          variantsFor(h.key)
+            .filter((v) => v.key !== 'champion')
+            .map(async (v) => ({
+              key: v.key,
+              label: v.label,
+              live: await directionalStats(symbol, h.kind, true, v.key),
+            })),
+        ),
       };
     }),
   );
@@ -320,26 +340,29 @@ export async function recordStockSignal(symbol: string): Promise<RecordResult> {
   const asOf = res.as_of;
   const lanes: RecordResult['lanes'] = [];
 
-  // (지평 × 규칙 후보). 후보는 CHALLENGER_HORIZONS에 든 지평에만 붙는다 — 5거래일은
-  // 두 후보의 창이 같아서 같은 예측을 두 번 남기게 되기 때문이다.
-  const jobs = HORIZONS.flatMap((h) =>
-    SIGNAL_VARIANTS.filter(
-      (v) => v.key === 'champion' || CHALLENGER_HORIZONS.includes(h.key),
-    ).map((v) => ({ h, v })),
-  );
+  // (지평 × 규칙 후보). 후보마다 붙는 지평이 다르다 — 추세 창만 바꾸는 후보는 창이
+  // 같은 5거래일에 붙여봐야 같은 예측을 두 번 남길 뿐이다 (variantsFor 참고).
+  const jobs = HORIZONS.flatMap((h) => variantsFor(h.key).map((v) => ({ h, v })));
 
   for (const { h, v } of jobs) {
-    // 후보는 추세만 다른 창으로 다시 판정한다. 나머지 컴포넌트(수급·SOX)는 공유한다.
+    // champion은 이미 계산된 신호를 그대로 쓴다. 후보는 바꾸는 것에 따라 다시 판정한다 —
+    // 창을 바꾸는 후보는 추세만, 규칙을 바꾸는 후보는 컴포넌트 구성 자체를.
+    const hasRules = Object.keys(v.rules).length > 0;
     const vSig =
-      v.trend_windows === null
+      v.trend_windows === null && !hasRules
         ? sig
         : computeSignal(res.inputs.indicators, res.inputs.regime, {
-            trend: trendWithWindows(
-              res.inputs.bars,
-              v.trend_windows.short,
-              v.trend_windows.long,
-            ),
-            trendReason: `${v.label} 기준 추세`,
+            ...(v.trend_windows === null
+              ? {}
+              : {
+                  trend: trendWithWindows(
+                    res.inputs.bars,
+                    v.trend_windows.short,
+                    v.trend_windows.long,
+                  ),
+                  trendReason: `${v.label} 기준 추세`,
+                }),
+            rules: v.rules,
           });
     const vDir = vSig?.raw_direction;
     const label = v.key === 'champion' ? h.label : `${h.label} · ${v.label}`;

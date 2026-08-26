@@ -560,6 +560,23 @@ function cardBasis(i: ApiStockSnapshot): string {
   return `${d} 마감 확정`;
 }
 
+/**
+ * 방향 쏠림 한 줄. **적중률 옆에 반드시 같이 둔다** — 2026-08 하루 레인은 24건이 전부
+ * 하방이었는데 "35% 맞음"만 보여서 그게 안 드러났다. 한쪽만 부르는 규칙은 예측이
+ * 아니라 상수이고, 그건 적중률이 아니라 이 숫자로만 보인다.
+ */
+function callBalanceText(calls: { n: number; up: number; down: number; up_share: number | null }) {
+  if (calls.n === 0) return null;
+  const stuck = calls.up === 0 || calls.down === 0;
+  return (
+    <span className={stuck ? 'text-amber-600 dark:text-amber-400' : 'text-zinc-400'}>
+      {' · '}
+      상방 {calls.up} / 하방 {calls.down}
+      {stuck && ` — 한쪽만 부르고 있다`}
+    </span>
+  );
+}
+
 function payloadNum(payload: unknown, key: string): number {
   const v = Number((payload as Record<string, unknown> | null)?.[key]);
   return Number.isFinite(v) ? v : NaN;
@@ -957,16 +974,17 @@ export default async function StockDashboardPage() {
                     </div>
                     {/* 병행 기록 중인 후보 규칙. 현행을 바꾸지 않고 같은 날 같은 조건으로
                         채점받게 해서, 몇 달 뒤 실전 데이터로 고르려는 것이다. */}
-                    {h.challenger && (
-                      <div className="mt-1 text-zinc-400">
-                        후보 {h.challenger.label}:{' '}
-                        {h.challenger.live.scored > 0
-                          ? `${h.challenger.live.scored}건 중 ${Math.round((h.challenger.live.hit_rate ?? 0) * 100)}% 맞음`
-                          : h.challenger.live.pending > 0
-                            ? `아직 없음 (${h.challenger.live.pending}건 대기)`
+                    {h.challengers.map((c) => (
+                      <div key={c.key} className="mt-1 text-zinc-400">
+                        후보 {c.label}:{' '}
+                        {c.live.scored > 0
+                          ? `${c.live.scored}건 중 ${Math.round((c.live.hit_rate ?? 0) * 100)}% 맞음`
+                          : c.live.pending > 0
+                            ? `아직 없음 (${c.live.pending}건 대기)`
                             : '아직 없음'}
+                        {callBalanceText(c.live.calls)}
                       </div>
-                    )}
+                    ))}
                     <div className="mt-1 text-zinc-500">
                       실제 성적:{' '}
                       {h.live.scored > 0
@@ -974,6 +992,7 @@ export default async function StockDashboardPage() {
                         : h.live.pending > 0
                           ? `아직 없음 (${h.live.pending}건 채점 대기)`
                           : '아직 없음'}
+                      {callBalanceText(h.live.calls)}
                       {(h.blocked.scored > 0 || h.blocked.pending > 0) && (
                         <span className="text-zinc-400">
                           {' · '}

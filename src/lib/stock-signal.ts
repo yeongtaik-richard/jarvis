@@ -32,10 +32,42 @@ const TREND_WORD: Record<string, string> = {
   unknown: '판단 불가',
 };
 
+export type ComponentKey =
+  | 'trend'
+  | 'flow'
+  | 'relative_sox'
+  /** 추세를 쪼갠 두 조각 — splitTrend 규칙에서만 나온다 */
+  | 'trend_position'
+  | 'trend_structure'
+  /** 기관 수급 — institutionFlow 규칙에서만 나온다 */
+  | 'flow_institution';
+
 export interface SignalComponent {
-  key: 'trend' | 'flow' | 'relative_sox';
+  key: ComponentKey;
   value: -1 | 0 | 1;
   reason: string;
+}
+
+/**
+ * 규칙 후보가 바꾸는 것들. 비어 있으면 현행(champion)이다.
+ *
+ * ## splitTrend — 왜 쪼개나
+ * 현행 추세는 `종가가 MA20보다 +3% 위` **AND** `MA20 > MA60`일 때만 'up'이다. 둘은
+ * 서로 다른 정보인데 AND로 묶여 한쪽이 다른 쪽을 삼킨다. 2026-08-25 실측이 그 결과다:
+ * 종가가 MA20보다 **+7.4% 위**인데 MA20이 MA60보다 22.8% 아래라 판정이 '횡보'(0)였다.
+ * MA60은 7월 폭락 전 가격을 물고 있어 몇 주간 회복되지 않는다.
+ *
+ * 그래서 `directional_1d`는 2026-08-04~08-25 24건이 **전부 하방**이었다. 그동안 주가는
+ * 08-07 1,422,000 → 08-21 1,730,000으로 +21.7% 올랐다. 틀린 예측이 아니라 예측이
+ * 아니었다 — 한쪽만 나오는 규칙은 상수다.
+ *
+ * ## institutionFlow — 왜 더하나
+ * 수급 컴포넌트가 외국인만 본다. 같은 날 외국인이 20일간 5.03조를 파는 동안 기관은
+ * 1.04조를 샀는데, 그 정보가 통째로 버려졌다.
+ */
+export interface SignalRules {
+  splitTrend?: boolean;
+  institutionFlow?: boolean;
 }
 
 export interface RuleSignal {
@@ -62,12 +94,27 @@ export interface RuleSignal {
   disclaimer: string;
 }
 
-/** |score|가 이 값 이상이어야 방향 신호. */
-const SIGNAL_THRESHOLD = 2;
-/** 변동성 극단(≥90%ile)에서는 만점일 때만 방향 신호 — 급등락 구간의 신호는 신뢰도가 낮다. */
-const EXTREME_VOL_THRESHOLD = 3;
+/**
+ * 임계값은 **컴포넌트 수에 비례**한다. 후보마다 컴포넌트 개수가 달라서 절대값으로 두면
+ * 5개짜리 규칙이 3개짜리보다 훨씬 무르게 발효된다.
+ *
+ * 비율은 현행 3컴포넌트 규칙의 임계(2, 극단 3)를 그대로 재현하도록 잡았다 —
+ * ceil(3 × 2/3) = 2, ceil(3 × 0.8) = 3. **champion의 동작은 한 톨도 안 바뀐다.**
+ */
+const THRESHOLD_RATIO = 2 / 3;
+/** 변동성 극단(≥90%ile)에서는 거의 만장일치일 때만 — 급등락 구간의 신호는 신뢰도가 낮다. */
+const EXTREME_THRESHOLD_RATIO = 0.8;
+const thresholdFor = (maxScore: number, extreme: boolean): number =>
+  Math.max(1, Math.ceil(maxScore * (extreme ? EXTREME_THRESHOLD_RATIO : THRESHOLD_RATIO)));
+
 /** SOX 대비 20일 초과수익이 이 %p를 넘어야 상대강도 컴포넌트가 켜진다. */
 const RS_EXCESS_PCT = 5;
+/** 종가가 MA20에서 이 % 밖이어야 위치 컴포넌트가 켜진다 (현행 추세 규칙과 같은 폭). */
+const MA20_POS_PCT = 3;
+/** MA20과 MA60이 이 % 넘게 벌어져야 배열 컴포넌트가 켜진다 — 붙어 있으면 방향이 없다. */
+const MA_STACK_PCT = 1;
+/** 수급 컴포넌트가 켜지려면 같은 방향이 이만큼 이어져야 한다. */
+const FLOW_STREAK_MIN = 2;
 
 // 화면의 "미검증 · 실전 표본" 배지와 지평 표가 이미 표본·기저율을 보여주므로,
 // 여기서는 그 둘이 못 하는 말만 한다 — 이건 규칙의 출력이지 매매 지시가 아니라는 것.
@@ -77,24 +124,51 @@ export const SIGNAL_DISCLAIMER =
 export function computeSignal(
   ind: Indicators | null,
   regime: Regime | null,
-  /** 추세만 다른 창으로 갈아끼운다 — 후보 규칙 병행 기록용 (SIGNAL_VARIANTS 참고). */
-  opts?: { trend?: Trend; trendReason?: string },
+  /** 추세 창 교체(trend/trendReason)와 규칙 후보(rules). SIGNAL_VARIANTS 참고. */
+  opts?: { trend?: Trend; trendReason?: string; rules?: SignalRules },
 ): RuleSignal | null {
   if (!ind || !regime) return null;
 
+  const rules = opts?.rules ?? {};
   const components: SignalComponent[] = [];
   const trend = opts?.trend ?? regime.trend;
 
-  // 1) 추세 — regime의 보수적 판정을 그대로 쓴다 (가격·MA 배열이 일치할 때만 방향).
-  components.push({
-    key: 'trend',
-    value: trend === 'up' ? 1 : trend === 'down' ? -1 : 0,
-    reason:
-      opts?.trendReason ??
-      (trend === 'unknown'
-        ? '추세를 판단할 만큼 데이터가 없다'
-        : `${TREND_WORD[trend] ?? trend} — 20일 평균선 대비 ${ind.dist_ma20_pct ?? '?'}%`),
-  });
+  if (rules.splitTrend) {
+    // 1a) 위치 — 종가가 20일 평균선의 어느 쪽에 있나. 반등을 즉시 읽는다.
+    const dist = ind.dist_ma20_pct;
+    components.push({
+      key: 'trend_position',
+      value: dist === null ? 0 : dist > MA20_POS_PCT ? 1 : dist < -MA20_POS_PCT ? -1 : 0,
+      reason:
+        dist === null
+          ? '20일 평균선을 만들 데이터가 없다'
+          : `종가가 20일 평균선보다 ${Math.abs(dist)}% ${dist > 0 ? '높다' : '낮다'}`,
+    });
+    // 1b) 배열 — MA20이 MA60 위인가. 회복이 굳었는지를 본다. 위치보다 느리다.
+    const gap =
+      ind.ma20 !== null && ind.ma60 !== null && ind.ma60 !== 0
+        ? (ind.ma20 / ind.ma60 - 1) * 100
+        : null;
+    components.push({
+      key: 'trend_structure',
+      value: gap === null ? 0 : gap > MA_STACK_PCT ? 1 : gap < -MA_STACK_PCT ? -1 : 0,
+      reason:
+        gap === null
+          ? '평균선 배열을 볼 데이터가 없다'
+          : `20일 평균선이 60일 평균선보다 ${Math.abs(gap).toFixed(1)}% ${gap > 0 ? '위에 있다' : '아래에 있다'}`,
+    });
+  } else {
+    // 1) 추세 — regime의 보수적 판정을 그대로 쓴다 (가격·MA 배열이 일치할 때만 방향).
+    components.push({
+      key: 'trend',
+      value: trend === 'up' ? 1 : trend === 'down' ? -1 : 0,
+      reason:
+        opts?.trendReason ??
+        (trend === 'unknown'
+          ? '추세를 판단할 만큼 데이터가 없다'
+          : `${TREND_WORD[trend] ?? trend} — 20일 평균선 대비 ${ind.dist_ma20_pct ?? '?'}%`),
+    });
+  }
 
   // 2) 수급 — 외국인 20일 누적과 연속 방향이 일치할 때만 방향.
   components.push({
@@ -107,6 +181,21 @@ export function computeSignal(
           ? '수급을 판단할 만큼 데이터가 없다'
           : `외국인이 ${Math.abs(ind.foreign_streak_days)}거래일 연속 ${regime.flow === 'foreign_buying' ? '사들이고' : '팔고'} 있다`,
   });
+
+  if (rules.institutionFlow) {
+    // 2b) 기관 수급 — 외국인과 같은 규칙(20일 누적 부호 + 연속일)을 기관에 적용한다.
+    const net = ind.institution_net_20d;
+    const st = ind.institution_streak_days;
+    const enough = Math.abs(st) >= FLOW_STREAK_MIN;
+    components.push({
+      key: 'flow_institution',
+      value: net === null ? 0 : net > 0 && enough && st > 0 ? 1 : net < 0 && enough && st < 0 ? -1 : 0,
+      reason:
+        net === null
+          ? '기관 수급 데이터가 없다'
+          : `기관이 20일 동안 ${(Math.abs(net) / 1_000_000).toFixed(2)}조 ${net > 0 ? '샀다' : '팔았다'} · 최근 ${Math.abs(st)}거래일 연속 ${st > 0 ? '순매수' : st < 0 ? '순매도' : '방향 없음'}`,
+    });
+  }
 
   // 3) 상대강도 — 종목이 안 들어간 벤치마크(SOX)만 쓴다. 오염 지수는 신호에 넣지 않는다.
   const sox = ind.relative.find((r) => r.key === 'sox' && !r.contains_stock);
@@ -122,15 +211,16 @@ export function computeSignal(
   });
 
   const score = components.reduce((a, c) => a + c.value, 0);
+  const maxScore = components.length;
   const extreme = regime.volatility === 'extreme';
-  const threshold = extreme ? EXTREME_VOL_THRESHOLD : SIGNAL_THRESHOLD;
+  const threshold = thresholdFor(maxScore, extreme);
+  const normalThreshold = thresholdFor(maxScore, false);
 
   let signal: SignalValue = 'watch';
   if (score >= threshold) signal = 'buy';
   else if (score <= -threshold) signal = 'sell';
 
-  const gated =
-    extreme && Math.abs(score) >= SIGNAL_THRESHOLD && Math.abs(score) < EXTREME_VOL_THRESHOLD;
+  const gated = extreme && Math.abs(score) >= normalThreshold && Math.abs(score) < threshold;
 
   return {
     signal,
@@ -179,14 +269,46 @@ export type HorizonKey = (typeof HORIZONS)[number]['key'];
  * 후보가 같은 창이라 후보를 따로 기록하지 않는다 — 같은 예측을 두 번 남길 이유가 없다.
  */
 export const SIGNAL_VARIANTS = [
-  { key: 'champion', label: '현행 20/60', trend_windows: null },
-  { key: 'ma_10_20', label: '지평별 창 10/20', trend_windows: { short: 10, long: 20 } },
+  {
+    key: 'champion',
+    label: '현행 20/60',
+    trend_windows: null,
+    rules: {} as SignalRules,
+    horizons: ['d1', 'd5'] as HorizonKey[],
+  },
+  {
+    key: 'ma_10_20',
+    label: '지평별 창 10/20',
+    trend_windows: { short: 10, long: 20 },
+    rules: {} as SignalRules,
+    // 5거래일에는 안 붙인다 — 이 후보는 추세 창만 바꾸는데 d5는 champion과 창이 같다.
+    horizons: ['d1'] as HorizonKey[],
+  },
+  {
+    key: 'split_trend',
+    label: '추세 분리(위치·배열)',
+    trend_windows: null,
+    rules: { splitTrend: true } as SignalRules,
+    horizons: ['d1', 'd5'] as HorizonKey[],
+  },
+  {
+    key: 'inst_flow',
+    label: '기관 수급 추가',
+    trend_windows: null,
+    rules: { institutionFlow: true } as SignalRules,
+    horizons: ['d1', 'd5'] as HorizonKey[],
+  },
 ] as const;
 
 export type VariantKey = (typeof SIGNAL_VARIANTS)[number]['key'];
 
-/** 후보를 병행 기록할 지평. 1거래일만 — 5거래일은 두 후보의 창이 같다. */
-export const CHALLENGER_HORIZONS: HorizonKey[] = ['d1'];
+/**
+ * 후보는 **하나씩만** 바꾼다. `split_trend`와 `inst_flow`를 한 후보에 합치면 둘 중
+ * 무엇이 효과를 냈는지 영영 못 가른다. 둘 다 이기면 그때 합친 후보를 새로 단다.
+ */
+export function variantsFor(horizon: HorizonKey) {
+  return SIGNAL_VARIANTS.filter((v) => (v.horizons as readonly HorizonKey[]).includes(horizon));
+}
 
 // ── 점수 시계열 + 백테스트 ──────────────────────────────────────────────
 
@@ -203,6 +325,27 @@ export interface SignalSeriesPoint {
   components: Record<string, number>;
 }
 
+/**
+ * 규칙이 **한쪽만 부르고 있지 않은가**. 적중률이 못 하는 말을 한다.
+ *
+ * 왜 필요한가: `directional_1d`는 2026-08-04~08-25 24건이 전부 하방이었는데, 적중률
+ * 지표만 봐서는 그게 안 보였다. 35%라는 숫자는 "가끔 틀린 규칙"처럼 읽히지만 실제로는
+ * **상방 칸이 한 번도 안 켜진 상수**였다. 그 3주 동안 주가는 +21.7% 올랐다.
+ *
+ * 그래서 후보를 고를 때 적중률과 **같이** 본다. 한쪽만 부르는 규칙은 적중률이 좋아도
+ * (기저율이 한쪽으로 쏠린 구간에서는 그럴 수 있다) 채택 후보가 아니다.
+ */
+export interface CallBalance {
+  /** 방향을 낸 날 수 */
+  n: number;
+  up: number;
+  down: number;
+  /** 상방 비율. 0이나 1이면 규칙이 한쪽에 갇혀 있다. 방향을 낸 날이 없으면 null. */
+  up_share: number | null;
+  /** 컴포넌트별로 +1 / 0 / -1이 몇 번 나왔나 — 어느 재료가 갇혀 있는지 짚어준다. */
+  components: Record<string, { pos: number; zero: number; neg: number }>;
+}
+
 export interface SignalBacktest {
   horizon_days: number;
   buy: { n: number; hits: number; hit_rate: number | null };
@@ -212,7 +355,34 @@ export interface SignalBacktest {
    * 적중률은 이것과의 차이로만 의미가 있다 — 상승장에서는 무작위 매수도 60%가 나온다.
    */
   baseline_up_rate: number | null;
+  /** 게이트를 통과한 신호의 방향 균형 */
+  balance: CallBalance;
+  /** 게이트를 무시한 원시 방향의 균형 — 쏠림이 게이트 탓인지 재료 탓인지 가른다 */
+  raw_balance: CallBalance;
   note: string;
+}
+
+/** 시계열에서 방향 균형을 센다. `pick`이 그 날의 방향을 준다(null이면 방향 없음). */
+export function computeCallBalance(
+  series: SignalSeriesPoint[],
+  pick: (pt: SignalSeriesPoint) => 'buy' | 'sell' | null,
+): CallBalance {
+  let up = 0;
+  let down = 0;
+  const components: CallBalance['components'] = {};
+  for (const pt of series) {
+    for (const [k, v] of Object.entries(pt.components)) {
+      components[k] = components[k] ?? { pos: 0, zero: 0, neg: 0 };
+      if (v > 0) components[k]!.pos++;
+      else if (v < 0) components[k]!.neg++;
+      else components[k]!.zero++;
+    }
+    const d = pick(pt);
+    if (d === 'buy') up++;
+    else if (d === 'sell') down++;
+  }
+  const n = up + down;
+  return { n, up, down, up_share: n > 0 ? Number((up / n).toFixed(3)) : null, components };
 }
 
 /**
@@ -258,6 +428,8 @@ export function computeSignalBacktest(
     buy,
     sell,
     baseline_up_rate: baseN > 0 ? Number((baseUp / baseN).toFixed(3)) : null,
+    balance: computeCallBalance(series, (pt) => (pt.signal === 'watch' ? null : pt.signal)),
+    raw_balance: computeCallBalance(series, (pt) => pt.raw_direction),
     note: '규칙을 만들 때 이미 본 과거 데이터로 채점한 값이라, 실제 성적보다 좋게 나온다.',
   };
 }

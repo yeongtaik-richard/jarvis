@@ -142,6 +142,8 @@ export interface Indicators {
   institution_net_20d: number | null;
   individual_net_20d: number | null;
   foreign_streak_days: number; // 같은 방향 연속 (양수=순매수, 음수=순매도)
+  /** 기관의 같은 방향 연속일. 외국인과 갈리는 구간을 신호가 읽으려면 필요하다. */
+  institution_streak_days: number;
   /** 벤치마크 대비 초과수익. 벤치마크가 없으면 빈 배열. */
   relative: RelativeStrength[];
   /** 환율 변화율 (매크로 지표 — 초과수익 비교 대상이 아니다). */
@@ -292,15 +294,20 @@ export function computeIndicators(
   const sum = (pick: (x: Flow) => number) =>
     recent.length ? Math.round(recent.reduce((a, b) => a + pick(b), 0)) : null;
 
-  let streak = 0;
-  if (f.length) {
-    const sign = Math.sign(f[f.length - 1]!.foreign);
+  /** 최신일 부호와 같은 방향이 며칠 이어졌나. 부호를 곱해 방향까지 담는다. */
+  const streakOf = (pick: (x: Flow) => number): number => {
+    if (!f.length) return 0;
+    const sign = Math.sign(pick(f[f.length - 1]!));
+    if (sign === 0) return 0;
+    let n = 0;
     for (let i = f.length - 1; i >= 0; i--) {
-      if (Math.sign(f[i]!.foreign) === sign && sign !== 0) streak++;
+      if (Math.sign(pick(f[i]!)) === sign) n++;
       else break;
     }
-    streak *= sign;
-  }
+    return n * sign;
+  };
+  const streak = streakOf((x) => x.foreign);
+  const institutionStreak = streakOf((x) => x.institution);
 
   return {
     trading_days: n,
@@ -324,6 +331,7 @@ export function computeIndicators(
     institution_net_20d: sum((x) => x.institution),
     individual_net_20d: sum((x) => x.individual),
     foreign_streak_days: streak,
+    institution_streak_days: institutionStreak,
     fx: fxSeries
       .filter((f) => f.bars.length > 0)
       .map((f) => {
