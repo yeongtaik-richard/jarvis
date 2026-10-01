@@ -1,0 +1,51 @@
+name: collect-etf
+
+# 테마 ETF 일봉 수집 → jarvis 스냅샷 API.
+#
+# collect-stock.yml과 분리했다. 저쪽은 장중 매시간을 포함해 하루 여러 번 도는데,
+# ETF 일봉은 **마감 후 하루 한 번**이면 충분하다. 같은 워크플로에 묶으면 ETF 수집이
+# 장중 cron을 따라 불필요하게 도는 데다, 한쪽 실패가 다른 쪽을 끌고 내려간다.
+#
+# 09:50 UTC = 18:50 KST — collect-stock의 마감 수집(18:43 KST) 뒤에 돈다. KIS
+# 호출이 겹치지 않게 간격을 둔 것이다.
+on:
+  schedule:
+    - cron: '50 9 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      backfill_days:
+        description: '받을 과거 일수 (0 = 최근 확정일만, 900 ≈ 2년 3개월 전체)'
+        required: false
+        default: '0'
+      include_pending:
+        description: '백테스트에 아직 못 쓰는 ETF(광통신·전고체ESS)도 같이 받을지'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: collect-etf
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Collect ETF daily bars
+        run: pnpm exec tsx scripts/collect-etf.ts
+        env:
+          KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+          JARVIS_API_TOKEN: ${{ secrets.JARVIS_API_TOKEN }}
+          JARVIS_BASE_URL: ${{ secrets.JARVIS_BASE_URL }}
+          # 스케줄 실행은 입력이 없어서 0 (최근 확정일만)으로 떨어진다
+          ETF_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || '0' }}
+          ETF_PENDING: ${{ github.event.inputs.include_pending == 'true' && '1' || '0' }}
