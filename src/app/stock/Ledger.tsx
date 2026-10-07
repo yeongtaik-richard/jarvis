@@ -30,9 +30,15 @@ function md(date: string): string {
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${w})`;
 }
 
+/**
+ * 적중은 초록인데 빗나감이 zinc-300이면, 실전 적중률이 20~38%인 장부가 **대부분 옅은
+ * 회색 = 시각적 중립**으로 읽힌다. "대부분 틀렸다"가 "대부분 특별할 것 없다"로 보인다.
+ * 그렇다고 빨강을 쓸 수는 없다 — 이 화면에서 빨강은 **상승**이다(한국식 등락색,
+ * `page.tsx`의 `toneClass.pos`). 그래서 색상 대신 **대비**로 무게를 맞춘다.
+ */
 const VERDICT_BADGE: Record<string, string> = {
   confirmed: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
-  refuted: 'bg-zinc-300 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-200',
+  refuted: 'bg-zinc-700 text-zinc-50 dark:bg-zinc-300 dark:text-zinc-900',
   pending: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
   expired: 'bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500',
   unverifiable: 'bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500',
@@ -168,7 +174,7 @@ export function PredictionLedgerCard({ ledger }: { ledger: PredictionLedger }) {
         <span className="text-xs text-zinc-400">뭐라 했고, 맞았나</span>
         <span className="ml-auto text-xs">
           {running.scored > 0 ? (
-            <RecordLine label="" r={running} />
+            <RecordLine label="누적" r={running} />
           ) : (
             <span className="text-zinc-400">아직 채점된 게 없다</span>
           )}

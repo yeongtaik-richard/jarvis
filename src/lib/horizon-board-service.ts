@@ -25,6 +25,13 @@ export interface HorizonRow extends HorizonSpec {
   daysTo30: number;
   /** position_only 지평이 보여줄 것 */
   position: StockPosition | null;
+  /**
+   * `sharedTarget` 레인에서만 채운다 — 하루치 기록이 **서로 다른 방향**을 부른 날이
+   * 며칠인가. 그런 날은 무슨 일이 일어나든 한쪽이 적중·한쪽이 빗나감으로 남으므로,
+   * 적중률이 실력과 무관하게 50%로 끌려간다. 이 비율을 안 보여주면 d0의 51.6%가
+   * "동전 던지기보다 조금 나음"으로 읽힌다 — 실제로는 **산술 결과에 가깝다.**
+   */
+  selfConflict: { days: number; conflictDays: number } | null;
 }
 
 export interface HorizonBoard {
@@ -40,8 +47,17 @@ const n = (p: unknown, k: string): number | null => {
 };
 
 export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
-  const [signal, ledger, bars, fin, val, minuteRows, intradayCounts, pendingRows] =
-    await Promise.all([
+  const [
+    signal,
+    ledger,
+    bars,
+    fin,
+    val,
+    minuteRows,
+    intradayCounts,
+    pendingRows,
+    conflictRows,
+  ] = await Promise.all([
     getStockSignal(symbol),
     getPredictionLedger(symbol, { settledLimit: 200 }),
     getStockHistory(symbol, 'daily_ohlcv', 320),
@@ -83,6 +99,23 @@ export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
       )
       .orderBy(desc(stockPredictions.createdAt))
       .limit(40),
+    // 하루 안에서 방향이 갈린 날 세기. comparator가 곧 방향이다(gt=위, lt=아래).
+    // `sharedTarget` 레인은 하루치가 전부 같은 종가 하나를 겨냥하므로, 한 대상일에
+    // 방향이 둘이면 그 날은 적중·빗나감을 한 건씩 자동으로 만들어낸다.
+    db
+      .select({
+        kind: stockPredictions.kind,
+        targetBucket: stockPredictions.targetBucket,
+        dirs: sql<number>`count(distinct ${stockPredictions.comparator})::int`,
+      })
+      .from(stockPredictions)
+      .where(
+        and(
+          eq(stockPredictions.symbol, symbol),
+          inArray(stockPredictions.kind, SHARED_TARGET_KINDS),
+        ),
+      )
+      .groupBy(stockPredictions.kind, stockPredictions.targetBucket),
   ]);
 
   const closes = bars.map((b) => n(b.payload, 'close')!).filter(Number.isFinite);
@@ -146,6 +179,15 @@ export async function getHorizonBoard(symbol: string): Promise<HorizonBoard> {
         : null,
       daysTo30: tradingDaysTo30Samples(spec),
       position: spec.status === 'position_only' ? position : null,
+      selfConflict: (() => {
+        if (!spec.sharedTarget || !spec.kind) return null;
+        const days = conflictRows.filter((r) => r.kind === spec.kind);
+        if (days.length === 0) return null;
+        return {
+          days: days.length,
+          conflictDays: days.filter((r) => r.dirs > 1).length,
+        };
+      })(),
     };
   });
 
@@ -159,6 +201,14 @@ const KIND_OF: Record<string, string> = {
 };
 
 /** 장중 레인은 장부(HORIZONS 기반)에 없어서 예측 테이블을 직접 센다. */
+/**
+ * 하루치 기록이 같은 결과 하나를 겨냥하는 레인. 선언(`horizon-board.ts`)에서 끌어와
+ * 두 곳이 갈라지지 않게 한다.
+ */
+const SHARED_TARGET_KINDS = HORIZON_BOARD.filter((s) => s.sharedTarget && s.kind).map(
+  (s) => s.kind as string,
+);
+
 const INTRADAY_KINDS = [
   'directional_h1',
   'directional_d0',

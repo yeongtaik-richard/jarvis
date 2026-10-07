@@ -48,6 +48,15 @@ export interface HorizonSpec {
    * 똑같이 "30거래일"로 뭉개진다. 하루 1건 이하면 생략.
    */
   samplesPerDay?: number;
+  /**
+   * 하루치 기록이 **전부 같은 결과 하나**를 대상으로 하는가.
+   *
+   * `d0`가 그렇다 — 매 수집이 `(daily_ohlcv.close, 오늘)`을 대상으로 잡으므로, 하루
+   * 5~6건이 쌓여도 **독립 결과는 그날 종가 하나**다. 이걸 표시하지 않으면
+   * `samplesPerDay`가 표본 속도로 쓰여 "5거래일이면 30표본"이 되는데, 실제로는
+   * 30거래일이다(6배 부풀림). `h1`은 대상 분봉이 매번 달라서 여기 해당하지 않는다.
+   */
+  sharedTarget?: boolean;
   /** 이 지평을 예측하려면 무엇이 필요한가 (사람이 읽는 말) */
   needs: string;
   status: HorizonStatus;
@@ -60,15 +69,22 @@ export interface HorizonSpec {
 /**
  * 독립 표본 30개까지 몇 거래일 걸리나.
  *
- * 두 갈래다. 하루에 여러 건 쌓이는 지평(장중)은 **하루 표본 수**가 속도를 정하고,
- * 하루 이상 지평은 **중첩 창** 때문에 실질 표본이 n/h로 줄어드는 게 속도를 정한다.
- * 한쪽 공식만 쓰면 1시간 지평이 "30거래일"로 나온다 — 실제로는 6거래일이다.
+ * 세 갈래다. 하루에 여러 건 쌓이고 **건마다 결과가 다른** 지평(h1)은 하루 표본 수가
+ * 속도를 정하고, 하루 이상 지평은 **중첩 창** 때문에 실질 표본이 n/h로 줄어드는 게
+ * 속도를 정한다. 한쪽 공식만 쓰면 1시간 지평이 "30거래일"로 나온다 — 실제로는 6거래일이다.
+ *
+ * 세 번째가 `sharedTarget`이다. 하루에 여러 건 쌓이지만 **전부 같은 결과 하나**를
+ * 겨냥하는 지평(d0)은 기록 수가 아무리 많아도 독립 표본이 하루 1개다. 이 분기가
+ * 없을 때 보드는 d0를 "5거래일이면 30표본"이라고 적었다 — 6배 부풀린 숫자였다.
+ * 다일 지평의 중첩은 n/h로 정확히 깎으면서 장중 지평의 중복만 안 깎는 건 비대칭이고,
+ * 이 파일의 존재 이유(말할 수 없는 걸 말할 수 없다고 적는 것)에 정면으로 어긋난다.
  */
 export function tradingDaysTo30Samples(spec: {
   tradingDays: number;
   samplesPerDay?: number;
+  sharedTarget?: boolean;
 }): number {
-  if (spec.samplesPerDay && spec.samplesPerDay > 1) {
+  if (spec.samplesPerDay && spec.samplesPerDay > 1 && !spec.sharedTarget) {
     return Math.ceil(30 / spec.samplesPerDay);
   }
   return Math.ceil(Math.max(spec.tradingDays, 1) * 30);
@@ -115,10 +131,11 @@ export const HORIZON_BOARD: HorizonSpec[] = [
     label: '오늘 마감',
     tradingDays: 0.5,
     samplesPerDay: 6,
+    sharedTarget: true,
     needs: '장중 궤적·수급·시장',
     status: 'live',
     kind: 'directional_d0',
-    note: '매 수집마다 "지금 가격 대비 오늘 종가"를 기록한다. 하루 5~6건씩 쌓여 시간대별 신뢰도 곡선이 나온다.',
+    note: '매 수집마다 "지금 가격 대비 오늘 종가"를 기록한다. 하루 5~6건이 쌓이지만 **전부 같은 종가 하나**를 맞히는 것이라, 독립 표본은 하루 1개다. 게다가 시각마다 방향이 엇갈리는 날은 무슨 일이 일어나든 한쪽이 적중·한쪽이 빗나감으로 남아 적중률이 기계적으로 50%에 끌려간다 — 이 레인의 적중률은 하루 단위 신뢰도가 아니라 시간대 비교용으로만 읽을 것.',
   },
   {
     key: 'd1o',

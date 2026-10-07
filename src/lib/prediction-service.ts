@@ -242,38 +242,84 @@ export type PredictionStats = {
   refuted: number;
   expired: number;
   unverifiable: number;
-  /** confirmed / (confirmed + refuted). 채점 완료분만 대상. */
+  /**
+   * confirmed / (confirmed + refuted), **전체 kind를 뭉친 값**.
+   *
+   * ⚠️ 이 숫자 하나로는 어떤 질문에도 답할 수 없다. 분모에 `watch`(브리핑이 적은
+   * 관찰 항목)와 6종 directional 레인이 전부 섞여 있고, 레인마다 기저율이 다르다
+   * (1거래일 56.3% vs 5거래일 60.2%). 기저율이 다른 표본을 합친 적중률은 기저율
+   * 대비 엣지를 계산할 수 없어서, 정직성 규칙 ④를 **구조적으로 만족할 수 없다.**
+   * 인용할 일이 있으면 `by_kind`를 쓸 것.
+   */
   hit_rate: number | null;
   scored: number;
   by_author: { authored_by: string; confirmed: number; refuted: number; hit_rate: number | null }[];
+  /**
+   * kind별 성적. **해금 논의·성적 인용은 전부 이쪽을 쓴다.**
+   * `watch`와 규칙 레인은 만든 주체도 검증 방식도 달라서 같이 셀 수 없다.
+   */
+  by_kind: {
+    kind: string;
+    confirmed: number;
+    refuted: number;
+    scored: number;
+    pending: number;
+    expired: number;
+    unverifiable: number;
+    hit_rate: number | null;
+  }[];
 };
 
-/** 적중률 요약. validated_directional 해금 논의는 이 숫자 위에서만 한다. */
+/**
+ * 적중률 요약.
+ *
+ * `hit_rate`(전체 풀링)가 아니라 **`by_kind`의 해당 레인**을 봐야 한다 — 풀링 값은
+ * 분모의 3분의 2가 `watch`라 규칙 성적이 아니다. validated_directional 해금 논의도
+ * 특정 레인 하나(`directional_1d` 등) 위에서만 한다.
+ */
 export async function predictionStats(symbol: string): Promise<PredictionStats> {
   await scorePending(symbol);
   const rows = await db
     .select({
       status: stockPredictions.status,
       authoredBy: stockPredictions.authoredBy,
+      kind: stockPredictions.kind,
       n: sql<number>`count(*)::int`,
     })
     .from(stockPredictions)
     .where(eq(stockPredictions.symbol, symbol))
-    .groupBy(stockPredictions.status, stockPredictions.authoredBy);
+    .groupBy(stockPredictions.status, stockPredictions.authoredBy, stockPredictions.kind);
 
   const count = (st: string) =>
     rows.filter((r) => r.status === st).reduce((a, r) => a + r.n, 0);
   const confirmed = count('confirmed');
   const refuted = count('refuted');
 
+  // kind를 group by에 넣은 뒤로는 (author, status) 조합이 여러 행에 흩어진다.
+  // find로 한 행만 집으면 나머지가 조용히 사라지므로 전부 더해야 한다.
+  const sumOf = (pred: (r: (typeof rows)[number]) => boolean) =>
+    rows.filter(pred).reduce((a, r) => a + r.n, 0);
+  const rate = (c: number, f: number) => (c + f > 0 ? Number((c / (c + f)).toFixed(3)) : null);
+
   const authors = [...new Set(rows.map((r) => r.authoredBy))].map((a) => {
-    const c = rows.find((r) => r.authoredBy === a && r.status === 'confirmed')?.n ?? 0;
-    const f = rows.find((r) => r.authoredBy === a && r.status === 'refuted')?.n ?? 0;
+    const c = sumOf((r) => r.authoredBy === a && r.status === 'confirmed');
+    const f = sumOf((r) => r.authoredBy === a && r.status === 'refuted');
+    return { authored_by: a, confirmed: c, refuted: f, hit_rate: rate(c, f) };
+  });
+
+  const byKind = [...new Set(rows.map((r) => r.kind))].sort().map((k) => {
+    const inKind = (st: string) => sumOf((r) => r.kind === k && r.status === st);
+    const c = inKind('confirmed');
+    const f = inKind('refuted');
     return {
-      authored_by: a,
+      kind: k,
       confirmed: c,
       refuted: f,
-      hit_rate: c + f > 0 ? Number((c / (c + f)).toFixed(3)) : null,
+      scored: c + f,
+      pending: inKind('pending'),
+      expired: inKind('expired'),
+      unverifiable: inKind('unverifiable'),
+      hit_rate: rate(c, f),
     };
   });
 
@@ -288,5 +334,6 @@ export async function predictionStats(symbol: string): Promise<PredictionStats> 
     hit_rate: confirmed + refuted > 0 ? Number((confirmed / (confirmed + refuted)).toFixed(3)) : null,
     scored: confirmed + refuted,
     by_author: authors,
+    by_kind: byKind,
   };
 }

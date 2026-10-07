@@ -161,11 +161,25 @@ export async function getPredictionLedger(
       and(
         eq(stockPredictions.symbol, symbol),
         inArray(stockPredictions.kind, kinds),
-        // 장부는 최근 것만 본다 — 누적 성적은 아래에서 따로 센다
+        // 목록(오늘 판가름·결과·걸려 있는 것)은 최근 것만 본다. 누적 성적은 아래에서
+        // **전기간으로 따로** 센다 — 예전엔 이 주석만 그렇게 말하고 실제로는 같은
+        // 120일 배열을 썼다. d5는 120일이 비중첩 16표본이라, 표본이 의미를 갖기
+        // 시작하는 순간 헤드라인이 성장을 멈추고 오래된 증거가 조용히 증발한다.
         gte(stockPredictions.targetBucket, sql`to_char(now() - interval '120 days', 'YYYY-MM-DD')`),
       ),
     )
     .orderBy(desc(stockPredictions.targetBucket), desc(stockPredictions.createdAt));
+
+  // 누적 성적 전용 — 창 없이 전부. 대상이 규칙 레인 두 종뿐이라(하루 최대 2건)
+  // 행 수가 작고, 커져도 연 500건 규모다.
+  const allTimeRows = await db
+    .select()
+    .from(stockPredictions)
+    .where(
+      and(eq(stockPredictions.symbol, symbol), inArray(stockPredictions.kind, kinds)),
+    )
+    .orderBy(desc(stockPredictions.targetBucket), desc(stockPredictions.createdAt));
+  const allTime = allTimeRows.map(toEntry);
 
   const all = rows.map(toEntry);
   const pending = all.filter((e) => e.status === 'pending');
@@ -190,8 +204,8 @@ export async function getPredictionLedger(
       .slice(0, opts.settledLimit ?? 12),
     open: pending.filter((e) => e.target > today).sort((a, b) => a.target.localeCompare(b.target)),
     unscored: all.filter((e) => e.status === 'expired' || e.status === 'unverifiable').slice(0, 6),
-    running: record(all.filter((e) => e.passed)),
-    running_blocked: record(all.filter((e) => !e.passed)),
+    running: record(allTime.filter((e) => e.passed)),
+    running_blocked: record(allTime.filter((e) => !e.passed)),
     reviews,
     attribution: computeAttribution(settledEntries.filter((e) => e.passed)),
   };
