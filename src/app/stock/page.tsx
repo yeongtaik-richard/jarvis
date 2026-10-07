@@ -31,6 +31,7 @@ import {
   getThemeBoard,
   getThemeFlows,
   resolveWindow,
+  windowLocked,
   type ThemeRow,
 } from '@/lib/theme-board-service';
 import { moneyMil, won } from './format';
@@ -316,23 +317,51 @@ export default async function ThemeBoardPage({
           )}
         </div>
 
-        {/* 기간 선택. 링크라 서버에서 다시 정렬되고 클라이언트 JS가 필요 없다. */}
-        <nav className="flex gap-1 text-xs">
-          {BOARD_WINDOWS.map((w) => (
-            <Link
-              key={w.days}
-              href={`/stock?d=${w.days}`}
-              className={`px-2.5 py-1 rounded border ${
-                w.days === days
-                  ? 'border-zinc-400 bg-zinc-100 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100'
-                  : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900'
-              }`}
-            >
-              {w.label}
-            </Link>
-          ))}
+        {/* 기간 선택. 링크라 서버에서 다시 정렬되고 클라이언트 JS가 필요 없다.
+            이력이 모자란 창은 **버튼은 두되 못 누르게** 한다 — 버튼 자체를 숨기면
+            "6개월은 원래 없는 기능"으로 보이고, 열어주면 절반에서 끊긴 선이 "그 뒤로
+            안 움직였다"처럼 읽힌다. 얼마나 더 모이면 열리는지를 같이 적는다. */}
+        <nav className="flex gap-1 text-xs flex-wrap">
+          {BOARD_WINDOWS.map((w) => {
+            const locked = windowLocked(w, board.spanDays);
+            if (locked) {
+              return (
+                <span
+                  key={w.days}
+                  className="px-2.5 py-1 rounded border border-dashed border-zinc-200 text-zinc-300 dark:border-zinc-800 dark:text-zinc-700"
+                  title={`이력 ${board.spanDays}일 · ${w.minSpan}일부터 열림`}
+                >
+                  {w.label}
+                </span>
+              );
+            }
+            return (
+              <Link
+                key={w.days}
+                href={`/stock?d=${w.days}`}
+                className={`px-2.5 py-1 rounded border ${
+                  w.days === days
+                    ? 'border-zinc-400 bg-zinc-100 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100'
+                    : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900'
+                }`}
+              >
+                {w.label}
+              </Link>
+            );
+          })}
           <span className="self-center ml-1 text-zinc-400">상승률 순</span>
         </nav>
+
+        {(() => {
+          const next = BOARD_WINDOWS.find((w) => windowLocked(w, board.spanDays));
+          return next ? (
+            <p className="text-[11px] text-zinc-400 tabular-nums">
+              이력 {board.spanDays}일 · <strong>{next.label}</strong>은 {next.minSpan}일부터
+              열린다 ({next.minSpan - board.spanDays}일 더). 과거 일봉은 백필로 당겨올 수
+              있다 — 분봉과 달리 지난 날짜도 받아진다.
+            </p>
+          ) : null;
+        })()}
 
         {board.ranked.length === 0 ? (
           <div className="text-center py-12 text-zinc-500">
