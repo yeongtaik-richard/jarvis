@@ -18,9 +18,15 @@ on:
         required: false
         default: '0'
       include_pending:
-        description: '백테스트에 아직 못 쓰는 ETF(광통신·전고체ESS)도 같이 받을지'
+        description: '뒤늦게 상장한 ETF(광통신·전고체ESS)도 같이 받을지'
         required: false
         default: 'false'
+      mode:
+        description: 'collect = 수집 / probe = 조회만 하고 저장 안 함 (ETF 지원 여부 확인용)'
+        required: false
+        default: 'collect'
+        type: choice
+        options: [collect, probe]
 
 concurrency:
   group: collect-etf
@@ -39,8 +45,15 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # probe는 조회만 하고 저장하지 않는다 — ETF에서 어떤 필드가 실제로 오는지
+      # 확인하는 용도라, 되는지 모르는 값을 DB에 넣기 전에 먼저 눈으로 본다.
       - name: Collect ETF daily bars
-        run: pnpm exec tsx scripts/collect-etf.ts
+        run: |
+          if [ "${{ github.event.inputs.mode }}" = "probe" ]; then
+            pnpm exec tsx scripts/probe-etf.ts
+          else
+            pnpm exec tsx scripts/collect-etf.ts
+          fi
         env:
           KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
           KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}

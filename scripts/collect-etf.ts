@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import { dailyCandles, dailyCandlesRange, type KisCreds } from '../src/lib/kis-marketdata';
 import { getKisToken } from '../src/lib/kis-token-cache';
-import { THEME_UNIVERSE, THEME_PENDING, type ThemeEtf } from '../src/lib/theme-universe';
+import { THEME_UNIVERSE, type ThemeEtf } from '../src/lib/theme-universe';
 
 const BASE = process.env.JARVIS_BASE_URL ?? 'http://localhost:3000';
 const KST = 9 * 3600 * 1000;
@@ -49,12 +49,14 @@ function backfillDays(): number {
 }
 
 /**
- * `--pending` → 아직 백테스트에 못 쓰는 ETF도 같이 받는다. 운용에는 넣으면서
- * 데이터를 미리 쌓아두려는 용도 — 지금 안 모으면 나중에도 못 모은다.
+ * 유니버스 전체를 받는다 — 테마도 기준선(나스닥100·S&P500)도.
+ *
+ * 한때 `--pending`으로 일부를 빼는 분기가 있었다. 로테이션 백테스트가 공통 구간을
+ * 필요로 해서 어린 ETF를 제외해야 했기 때문인데, 추이 보드로 방향을 틀면서 그 제약이
+ * 사라졌다. 각자 가진 만큼만 그리면 된다.
  */
 function universe(): ThemeEtf[] {
-  const withPending = process.argv.includes('--pending') || process.env.ETF_PENDING === '1';
-  return withPending ? [...THEME_UNIVERSE, ...THEME_PENDING] : THEME_UNIVERSE;
+  return THEME_UNIVERSE;
 }
 
 // KRX 정규장 마감 + 종가단일가 정리. 이 시각 전의 "오늘"은 확정 일봉이 아니다.
@@ -156,7 +158,10 @@ async function main(): Promise<void> {
               // 테마 식별자를 payload에 같이 둔다 — 백테스트가 코드를 외우지 않아도
               // 되고, 나중에 ETF를 교체해도 테마 시계열이 이어진다.
               theme_key: etf.key,
+              theme_label: etf.label,
               etf_name: etf.name,
+              market: etf.market,
+              kind: etf.kind,
             },
           });
           posted++;
