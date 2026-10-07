@@ -22,6 +22,7 @@ import {
   currentQuote,
   investorFlows,
   investorTrendEstimate,
+  overseasStockDaily,
   type KisCreds,
 } from '../src/lib/kis-marketdata';
 import { getKisToken } from '../src/lib/kis-token-cache';
@@ -106,6 +107,27 @@ async function main(): Promise<void> {
       console.log(`  [장중추정] ✗ ERROR ${String(e).slice(0, 120)}`);
     }
     await new Promise((r) => setTimeout(r, 300));
+  }
+
+  // ── 미국 상장 종목은 거래소 코드(EXCD)를 알아야 조회된다. ETHU는 Cboe BZX가 주
+  //    상장소인데 KIS가 BZX를 따로 받는지 불명확해서, 후보를 훑어 되는 것을 찾는다.
+  //    추측해서 수집기에 박으면 조용히 빈 응답만 쌓인다.
+  const overseas = (process.env.PROBE_OVERSEAS ?? '').split(',').filter(Boolean);
+  for (const symb of overseas) {
+    console.log(`\n──── [해외] ${symb}`);
+    for (const excd of ['NAS', 'NYS', 'AMS', 'BAT']) {
+      try {
+        const bars = await overseasStockDaily(token, creds, excd, symb);
+        const last = bars[0];
+        console.log(
+          `  EXCD=${excd}  ${bars.length}일` +
+            (last ? `  최신 ${last.date} close=${last.close} vol=${last.volume}` : '  (빈 응답)'),
+        );
+      } catch (e) {
+        console.log(`  EXCD=${excd}  ✗ ${String(e).slice(0, 90)}`);
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
   }
 
   console.log(

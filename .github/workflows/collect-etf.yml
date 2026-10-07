@@ -31,6 +31,10 @@ on:
         default: 'collect'
         type: choice
         options: [collect, probe, intraday]
+      probe_overseas:
+        description: 'probe 모드에서 거래소 코드를 찾을 미국 티커 (쉼표 구분, 예: ETHU)'
+        required: false
+        default: ''
 
 concurrency:
   group: collect-etf
@@ -70,3 +74,5 @@ jobs:
           ETF_RUN_MODE: ${{ github.event.inputs.mode || (github.event.schedule == '5 0-6 * * 1-5' && 'intraday' || 'collect') }}
           ETF_MODE: ${{ github.event.inputs.mode || (github.event.schedule == '5 0-6 * * 1-5' && 'intraday' || 'collect') }}
           ETF_PENDING: ${{ github.event.inputs.include_pending == 'true' && '1' || '0' }}
+          # probe 모드에서 해외 티커의 거래소 코드를 찾을 때만 쓴다 (쉼표 구분)
+          PROBE_OVERSEAS: ${{ github.event.inputs.probe_overseas || '' }}
