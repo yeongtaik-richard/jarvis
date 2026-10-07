@@ -46,7 +46,7 @@ export interface ThemeEtf {
   /** ETF 정식 명칭 — 출처를 숨기지 않는다 */
   name: string;
   /** 운용사. 같은 테마가 운용사별로 다를 수 있어 화면에 같이 띄운다 */
-  issuer: 'KODEX' | 'RISE' | 'ACE' | 'TIGER';
+  issuer: 'KODEX' | 'RISE' | 'ACE' | 'TIGER' | 'PLUS';
   /**
    * 상장일 (YYYY-MM-DD). 수집 창을 자르고 "상장 N개월" 표기에 쓴다.
    *
@@ -122,7 +122,40 @@ export const THEME_UNIVERSE: ThemeEtf[] = [
     issuer: 'TIGER', listedOn: '2022-02-22', dateChecked: true, held: false,
     market: 'us', kind: 'theme', group: '기타' },
 
+  // ── AI capex 바깥. **이 묶음이 보드를 쓸모 있게 만든다.**
+  //    위 테마들은 반도체 4 + AI전력 2 + 광통신 + ESS + 원전 + 우주 + 사이버보안으로,
+  //    열한 개가 사실상 같은 베팅(AI 설비투자)이다. 그것만 있으면 AI가 쉬는 날 보드가
+  //    통째로 파래지고, 전부 같이 움직이는 화면은 "어디가 뜨거운가"를 답하지 못한다.
+  //    동인이 다른 축을 섞어야 "AI가 쉴 때 돈이 어디로 가나"가 보인다.
+  { key: 'bio', label: '바이오', code: '244580', name: 'KODEX 바이오',
+    issuer: 'KODEX', listedOn: '2016-01-01', dateChecked: false, held: false,
+    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+  { key: 'bank', label: '은행', code: '091170', name: 'KODEX 은행',
+    issuer: 'KODEX', listedOn: '2006-06-27', dateChecked: true, held: false,
+    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+  { key: 'auto', label: '자동차', code: '091180', name: 'KODEX 자동차',
+    issuer: 'KODEX', listedOn: '2006-06-27', dateChecked: true, held: false,
+    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+  { key: 'battery', label: '2차전지', code: '305720', name: 'KODEX 2차전지산업',
+    issuer: 'KODEX', listedOn: '2018-09-12', dateChecked: true, held: false,
+    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+  // 2026 수익률 1위 테마(72%)였는데 우리는 미국 우주항공만 들고 있었다. 국내 우주항공은
+  // 방산과 상당히 겹치므로, 둘이 갈리는 날이 있는지가 이 줄의 관전 포인트다.
+  { key: 'space_kr', label: '우주항공·UAM', code: '421320', name: 'PLUS 우주항공&UAM',
+    issuer: 'PLUS', listedOn: '2022-01-01', dateChecked: false, held: false,
+    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+  // 금은 테마라기보다 **자산군**이다. 주식이 빠질 때 반대로 가는 성질이라 순위 맨 위에
+  // 뜨는 날의 뜻이 다른 줄과 다르다 — "금 테마가 뜨겁다"가 아니라 "주식에서 돈이 나갔다"다.
+  { key: 'gold', label: '금', code: '132030', name: 'KODEX 골드선물(H)',
+    issuer: 'KODEX', listedOn: '2010-01-01', dateChecked: false, held: false,
+    market: 'us', kind: 'theme', group: '매크로' },
+
   // ── 기준선. 순위에 섞지 않는다 (상단 주석 §지수는 테마가 아니다).
+  // 코스닥150은 2026년 자금·거래량 1위다. 코스피200만 두면 중소형 잣대가 없어서,
+  // 중소형 테마가 "뜨겁다"고 나와도 시장 전체가 그런 건지 구분이 안 된다.
+  { key: 'kosdaq150', label: '코스닥 150', code: '229200', name: 'KODEX 코스닥150',
+    issuer: 'KODEX', listedOn: '2015-01-01', dateChecked: false, held: false,
+    market: 'kr', kind: 'benchmark', group: '기준선' },
   { key: 'kospi200', label: '코스피 200', code: '148020', name: 'RISE 200',
     issuer: 'RISE', listedOn: '2011-10-20', dateChecked: true, held: true,
     market: 'kr', kind: 'benchmark', group: '기준선' },

@@ -10,7 +10,11 @@ name: collect-etf
 # 호출이 겹치지 않게 간격을 둔 것이다.
 on:
   schedule:
+    # 마감 후 일봉·수급. 09:50 UTC = 18:50 KST — collect-stock의 마감 수집(18:43) 뒤다.
     - cron: '50 9 * * 1-5'
+    # 장중 현재가, 평일 09~15시 KST 매시간 (00~06 UTC). 과거 분봉은 KIS가 안 주므로
+    # 시간당 점은 **오늘부터 쌓는 수밖에 없다** — 지금 안 모으면 나중에도 못 모은다.
+    - cron: '5 0-6 * * 1-5'
   workflow_dispatch:
     inputs:
       backfill_days:
@@ -26,7 +30,7 @@ on:
         required: false
         default: 'collect'
         type: choice
-        options: [collect, probe]
+        options: [collect, probe, intraday]
 
 concurrency:
   group: collect-etf
@@ -49,7 +53,7 @@ jobs:
       # 확인하는 용도라, 되는지 모르는 값을 DB에 넣기 전에 먼저 눈으로 본다.
       - name: Collect ETF daily bars
         run: |
-          if [ "${{ github.event.inputs.mode }}" = "probe" ]; then
+          if [ "$ETF_RUN_MODE" = "probe" ]; then
             pnpm exec tsx scripts/probe-etf.ts
           else
             pnpm exec tsx scripts/collect-etf.ts
@@ -61,4 +65,8 @@ jobs:
           JARVIS_BASE_URL: ${{ secrets.JARVIS_BASE_URL }}
           # 스케줄 실행은 입력이 없어서 0 (최근 확정일만)으로 떨어진다
           ETF_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || '0' }}
+          # 장중 cron(5 0-6)이면 intraday, 마감 cron(50 9)이면 collect.
+          # 수동 실행은 mode 입력을 그대로 따른다.
+          ETF_RUN_MODE: ${{ github.event.inputs.mode || (github.event.schedule == '5 0-6 * * 1-5' && 'intraday' || 'collect') }}
+          ETF_MODE: ${{ github.event.inputs.mode || (github.event.schedule == '5 0-6 * * 1-5' && 'intraday' || 'collect') }}
           ETF_PENDING: ${{ github.event.inputs.include_pending == 'true' && '1' || '0' }}
