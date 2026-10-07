@@ -24,6 +24,7 @@ import {
   dailyCandlesRange,
   domesticBusinessDays,
   investorFlows,
+  overseasStockDaily,
   type KisCreds,
 } from '../src/lib/kis-marketdata';
 import { getKisToken } from '../src/lib/kis-token-cache';
@@ -202,6 +203,8 @@ async function main(): Promise<void> {
     // 끝난 뒤에도 거래가 이어진 것처럼 궤적이 늘어난다.
     const bucket = afterCloseNow() ? `${today.dashed}T15:00+09:00` : kstHourBucket(new Date());
     for (const etf of etfs) {
+      // 국내 현재가 API라 미국 상장은 못 받는다. 기초자산 장도 한국 장중엔 닫혀 있다.
+      if (etf.overseas) continue;
       try {
         const at = new Date();
         const q = await currentQuote(kisToken, creds, etf.code);
@@ -250,11 +253,15 @@ async function main(): Promise<void> {
       const from = wantFrom < etf.listedOn ? etf.listedOn : wantFrom;
       const start = from.replace(/-/g, '');
 
-      const bars = backfill
-        ? await dailyCandlesRange(kisToken, creds, etf.code, start, today.compact, {
-            maxCalls: Math.min(20, Math.ceil(backfill / 100) + 2),
-          })
-        : await dailyCandles(kisToken, creds, etf.code, start, today.compact);
+      // 미국 상장은 조회 API가 다르다. 기간 지정이 없어 **최근 100일 고정**으로 오는데,
+      // 보드가 보는 창(3개월)에는 충분하다.
+      const bars = etf.overseas
+        ? await overseasStockDaily(kisToken, creds, etf.overseas.excd, etf.overseas.symb)
+        : backfill
+          ? await dailyCandlesRange(kisToken, creds, etf.code, start, today.compact, {
+              maxCalls: Math.min(20, Math.ceil(backfill / 100) + 2),
+            })
+          : await dailyCandles(kisToken, creds, etf.code, start, today.compact);
 
       // 오늘이 미확정이면 진행 중인 부분 봉이 섞여 들어온다 — 그대로 저장하면
       // 종가가 아닌 값이 종가 자리에 박힌다.
@@ -303,6 +310,9 @@ async function main(): Promise<void> {
     } catch (e) {
       errors.push(`${etf.code} ${etf.name}: ${String(e)}`);
     }
+
+    // 투자자별 순매수는 국내 조회 API라 미국 상장에는 안 쓴다.
+    if (etf.overseas) continue;
 
     // ── 투자자별 순매수. ETF에도 **일별 수급은 나온다** (probe-etf.ts로 확인).
     //    장중 추정(investor-trend-estimate)은 ETF에서 빈 응답이라 아예 안 부른다 —

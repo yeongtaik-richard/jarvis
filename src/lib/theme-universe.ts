@@ -46,7 +46,7 @@ export interface ThemeEtf {
   /** ETF 정식 명칭 — 출처를 숨기지 않는다 */
   name: string;
   /** 운용사. 같은 테마가 운용사별로 다를 수 있어 화면에 같이 띄운다 */
-  issuer: 'KODEX' | 'RISE' | 'ACE' | 'TIGER' | 'PLUS';
+  issuer: 'KODEX' | 'RISE' | 'ACE' | 'TIGER' | 'PLUS' | 'Volatility Shares';
   /**
    * 상장일 (YYYY-MM-DD). 수집 창을 자르고 "상장 N개월" 표기에 쓴다.
    *
@@ -67,6 +67,16 @@ export interface ThemeEtf {
   market: 'kr' | 'us';
   kind: 'theme' | 'benchmark';
   group: string;
+  /**
+   * 미국 상장 종목. 있으면 국내 조회 API 대신 해외 시세 API를 쓴다.
+   *
+   * `excd`는 **추측하지 않고 프로브로 찾았다** — ETHU는 Cboe BZX가 주 상장소인데
+   * KIS에서는 `AMS`로만 응답이 온다(NAS·NYS·BAT는 빈 응답). 틀린 코드를 박으면
+   * 에러가 아니라 **빈 응답이 조용히 쌓여서**, 수집이 되는 줄 알고 넘어가게 된다.
+   */
+  overseas?: { excd: string; symb: string };
+  /** 가격 통화. 해외 상장은 달러라 원화로 포맷하면 "28원"이 된다. */
+  currency: 'KRW' | 'USD';
 }
 
 export const THEME_UNIVERSE: ThemeEtf[] = [
@@ -75,52 +85,52 @@ export const THEME_UNIVERSE: ThemeEtf[] = [
   //    상당히 겹쳐(둘 다 삼성전자·하이닉스 중심) 선이 비슷하게 갈 수 있다.
   { key: 'semi_kr', label: '반도체', code: '091160', name: 'KODEX 반도체',
     issuer: 'KODEX', listedOn: '2006-06-27', dateChecked: true, held: true,
-    market: 'kr', kind: 'theme', group: '반도체' },
+    market: 'kr', kind: 'theme', group: '반도체', currency: 'KRW' },
   { key: 'semi_equip', label: '반도체 장비', code: '471990', name: 'KODEX AI반도체핵심장비',
     issuer: 'KODEX', listedOn: '2023-11-21', dateChecked: true, held: true,
-    market: 'kr', kind: 'theme', group: '반도체' },
+    market: 'kr', kind: 'theme', group: '반도체', currency: 'KRW' },
   { key: 'semi_top2', label: '반도체 대형주', code: '395160', name: 'KODEX AI반도체TOP2플러스',
     issuer: 'KODEX', listedOn: '2021-01-01', dateChecked: false, held: false,
-    market: 'kr', kind: 'theme', group: '반도체' },
+    market: 'kr', kind: 'theme', group: '반도체', currency: 'KRW' },
   { key: 'semi_us', label: '미국 반도체', code: '390390', name: 'KODEX 미국반도체',
     issuer: 'KODEX', listedOn: '2021-06-30', dateChecked: true, held: false,
-    market: 'us', kind: 'theme', group: '반도체' },
+    market: 'us', kind: 'theme', group: '반도체', currency: 'KRW' },
 
   // ── AI 인프라. ai_power와 ai_power_infra는 겹치는 테마다 (상단 주석 §운용사 참고).
   { key: 'ai_power', label: 'AI 전력설비', code: '487240', name: 'KODEX AI전력핵심설비',
     issuer: 'KODEX', listedOn: '2024-07-09', dateChecked: true, held: true,
-    market: 'kr', kind: 'theme', group: 'AI 인프라' },
+    market: 'kr', kind: 'theme', group: 'AI 인프라', currency: 'KRW' },
   { key: 'ai_power_infra', label: 'AI 전력인프라', code: '0101N0', name: 'RISE AI전력인프라',
     issuer: 'RISE', listedOn: '2025-09-23', dateChecked: true, held: true,
-    market: 'kr', kind: 'theme', group: 'AI 인프라' },
+    market: 'kr', kind: 'theme', group: 'AI 인프라', currency: 'KRW' },
   { key: 'optical', label: 'AI 광통신', code: '0173Y0', name: 'KODEX 미국AI광통신네트워크',
     issuer: 'KODEX', listedOn: '2026-03-31', dateChecked: true, held: false,
-    market: 'us', kind: 'theme', group: 'AI 인프라' },
+    market: 'us', kind: 'theme', group: 'AI 인프라', currency: 'KRW' },
 
   // ── 에너지·중공업
   { key: 'nuclear', label: '원전', code: '433500', name: 'ACE 원자력TOP10',
     issuer: 'ACE', listedOn: '2022-06-28', dateChecked: true, held: true,
-    market: 'kr', kind: 'theme', group: '에너지·중공업' },
+    market: 'kr', kind: 'theme', group: '에너지·중공업', currency: 'KRW' },
   { key: 'ess', label: '전고체·ESS', code: '0209D0', name: 'KODEX 전고체배터리ESS TOP2플러스',
     issuer: 'KODEX', listedOn: '2026-06-23', dateChecked: true, held: true,
-    market: 'kr', kind: 'theme', group: '에너지·중공업' },
+    market: 'kr', kind: 'theme', group: '에너지·중공업', currency: 'KRW' },
   { key: 'defense', label: '방산', code: '0080G0', name: 'KODEX 방산TOP10',
     issuer: 'KODEX', listedOn: '2025-01-01', dateChecked: false, held: false,
-    market: 'kr', kind: 'theme', group: '에너지·중공업' },
+    market: 'kr', kind: 'theme', group: '에너지·중공업', currency: 'KRW' },
   { key: 'shipbuilding', label: '조선', code: '0115D0', name: 'KODEX 조선TOP10',
     issuer: 'KODEX', listedOn: '2025-01-01', dateChecked: false, held: false,
-    market: 'kr', kind: 'theme', group: '에너지·중공업' },
+    market: 'kr', kind: 'theme', group: '에너지·중공업', currency: 'KRW' },
 
   // ── 기타
   { key: 'robot', label: '로봇', code: '445290', name: 'KODEX 로봇액티브',
     issuer: 'KODEX', listedOn: '2022-01-01', dateChecked: false, held: false,
-    market: 'kr', kind: 'theme', group: '기타' },
+    market: 'kr', kind: 'theme', group: '기타', currency: 'KRW' },
   { key: 'space', label: '미국 우주항공', code: '0167Z0', name: 'KODEX 미국우주항공',
     issuer: 'KODEX', listedOn: '2026-03-17', dateChecked: true, held: false,
-    market: 'us', kind: 'theme', group: '기타' },
+    market: 'us', kind: 'theme', group: '기타', currency: 'KRW' },
   { key: 'cyber', label: 'AI 사이버보안', code: '418670', name: 'TIGER 글로벌AI사이버보안',
     issuer: 'TIGER', listedOn: '2022-02-22', dateChecked: true, held: false,
-    market: 'us', kind: 'theme', group: '기타' },
+    market: 'us', kind: 'theme', group: '기타', currency: 'KRW' },
 
   // ── AI capex 바깥. **이 묶음이 보드를 쓸모 있게 만든다.**
   //    위 테마들은 반도체 4 + AI전력 2 + 광통신 + ESS + 원전 + 우주 + 사이버보안으로,
@@ -129,42 +139,53 @@ export const THEME_UNIVERSE: ThemeEtf[] = [
   //    동인이 다른 축을 섞어야 "AI가 쉴 때 돈이 어디로 가나"가 보인다.
   { key: 'bio', label: '바이오', code: '244580', name: 'KODEX 바이오',
     issuer: 'KODEX', listedOn: '2016-01-01', dateChecked: false, held: false,
-    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+    market: 'kr', kind: 'theme', group: 'AI 바깥', currency: 'KRW' },
   { key: 'bank', label: '은행', code: '091170', name: 'KODEX 은행',
     issuer: 'KODEX', listedOn: '2006-06-27', dateChecked: true, held: false,
-    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+    market: 'kr', kind: 'theme', group: 'AI 바깥', currency: 'KRW' },
   { key: 'auto', label: '자동차', code: '091180', name: 'KODEX 자동차',
     issuer: 'KODEX', listedOn: '2006-06-27', dateChecked: true, held: false,
-    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+    market: 'kr', kind: 'theme', group: 'AI 바깥', currency: 'KRW' },
   { key: 'battery', label: '2차전지', code: '305720', name: 'KODEX 2차전지산업',
     issuer: 'KODEX', listedOn: '2018-09-12', dateChecked: true, held: false,
-    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+    market: 'kr', kind: 'theme', group: 'AI 바깥', currency: 'KRW' },
   // 2026 수익률 1위 테마(72%)였는데 우리는 미국 우주항공만 들고 있었다. 국내 우주항공은
   // 방산과 상당히 겹치므로, 둘이 갈리는 날이 있는지가 이 줄의 관전 포인트다.
   { key: 'space_kr', label: '우주항공·UAM', code: '421320', name: 'PLUS 우주항공&UAM',
     issuer: 'PLUS', listedOn: '2022-01-01', dateChecked: false, held: false,
-    market: 'kr', kind: 'theme', group: 'AI 바깥' },
+    market: 'kr', kind: 'theme', group: 'AI 바깥', currency: 'KRW' },
   // 금은 테마라기보다 **자산군**이다. 주식이 빠질 때 반대로 가는 성질이라 순위 맨 위에
   // 뜨는 날의 뜻이 다른 줄과 다르다 — "금 테마가 뜨겁다"가 아니라 "주식에서 돈이 나갔다"다.
   { key: 'gold', label: '금', code: '132030', name: 'KODEX 골드선물(H)',
     issuer: 'KODEX', listedOn: '2010-01-01', dateChecked: false, held: false,
-    market: 'us', kind: 'theme', group: '매크로' },
+    market: 'us', kind: 'theme', group: '매크로', currency: 'KRW' },
 
   // ── 기준선. 순위에 섞지 않는다 (상단 주석 §지수는 테마가 아니다).
   // 코스닥150은 2026년 자금·거래량 1위다. 코스피200만 두면 중소형 잣대가 없어서,
   // 중소형 테마가 "뜨겁다"고 나와도 시장 전체가 그런 건지 구분이 안 된다.
   { key: 'kosdaq150', label: '코스닥 150', code: '229200', name: 'KODEX 코스닥150',
     issuer: 'KODEX', listedOn: '2015-01-01', dateChecked: false, held: false,
-    market: 'kr', kind: 'benchmark', group: '기준선' },
+    market: 'kr', kind: 'benchmark', group: '기준선', currency: 'KRW' },
   { key: 'kospi200', label: '코스피 200', code: '148020', name: 'RISE 200',
     issuer: 'RISE', listedOn: '2011-10-20', dateChecked: true, held: true,
-    market: 'kr', kind: 'benchmark', group: '기준선' },
+    market: 'kr', kind: 'benchmark', group: '기준선', currency: 'KRW' },
   { key: 'nasdaq100', label: '나스닥 100', code: '379810', name: 'KODEX 미국나스닥100',
     issuer: 'KODEX', listedOn: '2021-01-01', dateChecked: false, held: true,
-    market: 'us', kind: 'benchmark', group: '기준선' },
+    market: 'us', kind: 'benchmark', group: '기준선', currency: 'KRW' },
   { key: 'sp500', label: 'S&P 500', code: '379800', name: 'KODEX 미국S&P500',
     issuer: 'KODEX', listedOn: '2021-01-01', dateChecked: false, held: true,
-    market: 'us', kind: 'benchmark', group: '기준선' },
+    market: 'us', kind: 'benchmark', group: '기준선', currency: 'KRW' },
+  // 이더리움 참고선. **2배 레버리지라 다른 줄과 성격이 다르다** — 일간 2배를 추종하므로
+  // 보드가 보여주는 1개월·3개월 수익률은 ETH의 2배가 아니다(변동성 끌림). 보수도 연
+  // 2.67%로 높고 현물이 아니라 선물로 익스포저를 만든다. 순위에 끼우지 않고 기준선으로
+  // 두는 이유다 — 레버리지는 거의 항상 맨 위나 맨 아래에 뜬다.
+  //
+  // 국내에는 가상자산 현물 ETF가 아직 없다. 자본시장법상 기초자산에 가상자산이 들어가
+  // 있지 않아서다(2026-07 금융위가 하반기 개정 추진 발표). 상장되면 이 줄을 바꾼다.
+  { key: 'eth', label: '이더리움 2x', code: 'ETHU', name: 'Volatility Shares 2x Ether ETF',
+    issuer: 'Volatility Shares', listedOn: '2024-06-04', dateChecked: true, held: false,
+    market: 'us', kind: 'benchmark', group: '기준선',
+    overseas: { excd: 'AMS', symb: 'ETHU' }, currency: 'USD' },
 ];
 
 export const THEMES = THEME_UNIVERSE.filter((t) => t.kind === 'theme');
