@@ -36,6 +36,7 @@ import {
 } from '@/lib/theme-board-service';
 import { moneyMil, won } from './format';
 import { ExpandAll } from './ExpandAll';
+import { PeriodLink } from './PeriodLink';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -325,8 +326,7 @@ export default async function ThemeBoardPage({
             안 움직였다"처럼 읽힌다. 얼마나 더 모이면 열리는지를 같이 적는다. */}
         <nav className="flex gap-1 text-xs flex-wrap">
           {BOARD_WINDOWS.map((w) => {
-            const locked = windowLocked(w, board.spanDays);
-            if (locked) {
+            if (windowLocked(w, board.spanDays)) {
               return (
                 <span
                   key={w.days}
@@ -338,17 +338,12 @@ export default async function ThemeBoardPage({
               );
             }
             return (
-              <Link
+              <PeriodLink
                 key={w.days}
-                href={`/stock?d=${w.days}`}
-                className={`px-2.5 py-1 rounded border ${
-                  w.days === days
-                    ? 'border-zinc-400 bg-zinc-100 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100'
-                    : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900'
-                }`}
-              >
-                {w.label}
-              </Link>
+                days={w.days}
+                label={w.label}
+                active={w.days === days}
+              />
             );
           })}
           <span className="self-center ml-1 text-zinc-400">상승률 순</span>
