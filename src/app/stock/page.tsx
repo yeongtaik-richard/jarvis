@@ -35,6 +35,7 @@ import {
   type ThemeRow,
 } from '@/lib/theme-board-service';
 import { moneyMil, won } from './format';
+import { ExpandAll } from './ExpandAll';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -198,6 +199,7 @@ function Row({
   const isBench = etf.kind === 'benchmark';
   return (
     <details
+      data-theme-row
       className={`border-t border-zinc-100 dark:border-zinc-900 first:border-t-0 ${
         isBench ? 'bg-zinc-100/70 dark:bg-zinc-900/60' : ''
       }`}
@@ -350,6 +352,7 @@ export default async function ThemeBoardPage({
             );
           })}
           <span className="self-center ml-1 text-zinc-400">상승률 순</span>
+          <ExpandAll />
         </nav>
 
         {(() => {
