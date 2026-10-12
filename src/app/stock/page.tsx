@@ -30,6 +30,7 @@ import {
   BOARD_WINDOWS,
   getThemeBoard,
   getThemeFlows,
+  isIntradayWindow,
   resolveWindow,
   windowLocked,
   type ThemeRow,
@@ -50,6 +51,9 @@ const retClass = (v: number | null): string =>
       : v < 0
         ? 'text-blue-600 dark:text-blue-400'
         : 'text-zinc-500';
+
+/** 일봉은 월-일, 장중 버킷은 시:분. 둘을 한 함수로 받아 축 라벨만 바꾼다. */
+const axisLabel = (d: string): string => (d.includes('T') ? d.slice(11, 16) : d.slice(5));
 
 const pct = (v: number | null): string =>
   v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
@@ -170,12 +174,12 @@ function ThemeChart({
         />
       </svg>
       <div className="flex justify-between text-[10px] text-zinc-400 tabular-nums">
-        <span>{points[0]!.date.slice(5)}</span>
+        <span>{axisLabel(points[0]!.date)}</span>
         <span>
           저 {usd ? `$${lo.toFixed(2)}` : lo.toLocaleString('ko-KR')} · 고{' '}
           {usd ? `$${hi.toFixed(2)}` : hi.toLocaleString('ko-KR')}
         </span>
-        <span>{points.at(-1)!.date.slice(5)}</span>
+        <span>{axisLabel(points.at(-1)!.date)}</span>
       </div>
     </div>
   );
@@ -194,7 +198,9 @@ function Row({
 }) {
   const { etf } = row;
   const up = row.ret === null ? null : row.ret > 0;
-  const win = windowed(row.points, days);
+  // 장중 창은 이미 오늘 것만 담겨 있어 다시 자르지 않는다. 날짜 기준으로 자르면
+  // ISO 버킷(`2026-10-12T13:00+09:00`)이 하루 창에 안 걸려 빈 선이 된다.
+  const win = isIntradayWindow(days) ? row.points : windowed(row.points, days);
   // 기준선은 번호를 안 달고 배경만 깐다. 번호를 달면 "지수가 3위"처럼 읽혀서, 테마가
   // 아닌 것이 테마 순위에 끼어든 꼴이 된다. 배경은 "여기가 기준선"이라는 눈금 역할만.
   const isBench = etf.kind === 'benchmark';

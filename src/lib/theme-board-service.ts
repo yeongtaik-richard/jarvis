@@ -139,6 +139,10 @@ function returnOver(points: ThemePoint[], days: number): number | null {
  * 숫자 중 숫자가 이 화면의 본체라, 숫자 기준으로 연다.
  */
 export const BOARD_WINDOWS = [
+  // `intraday`는 일봉이 아니라 **오늘 장중 버킷**을 읽는다. 일봉은 마감 후에야 확정돼서
+  // (18:50 수집) 장중에 '1일'을 눌러도 어제·그제 종가 두 점만 나온다 — 열어보면 오늘이
+  // 없다. 장이 도는 동안 보고 싶은 건 그게 아니라 **시가 대비 지금**이다.
+  { days: 0, label: '오늘', minSpan: 0, intraday: true },
   { days: 1, label: '1일', minSpan: 0 },
   { days: 7, label: '1주', minSpan: 7 },
   { days: 30, label: '1개월', minSpan: 30 },
@@ -149,12 +153,63 @@ export const BOARD_WINDOWS = [
 
 export function resolveWindow(raw: string | undefined): number {
   const n = Number(raw);
-  return BOARD_WINDOWS.some((w) => w.days === n) ? n : BOARD_SORT_DAYS;
+  return raw !== undefined && BOARD_WINDOWS.some((w) => w.days === n) ? n : BOARD_SORT_DAYS;
 }
+
+/** 0은 "오늘(장중)" 창이다. */
+export const isIntradayWindow = (days: number) => days === 0;
 
 /** 이력이 모자라 아직 못 여는 창인가. */
 export function windowLocked(w: { minSpan: number }, spanDays: number): boolean {
   return spanDays < w.minSpan;
+}
+
+/**
+ * 오늘 장중 추이. **시가를 첫 점으로 깔고** 시간 버킷을 잇는다.
+ *
+ * 시가를 넣는 이유는 둘이다. 수집이 한 번밖에 안 돈 날에도 선이 생기고("장 시작부터
+ * 현재까지"가 질문이므로 시작점이 있어야 한다), 수익률 기준이 전일 종가가 아니라
+ * **오늘 시가**가 되어 갭을 빼고 장중 움직임만 본다.
+ *
+ * 장중 cron은 하루 일곱 번 예정인데 GitHub Actions가 혼잡하면 거른다. 점이 한둘뿐인
+ * 날이 흔하고, 그건 선이 거칠다는 뜻이지 값이 틀렸다는 뜻은 아니다.
+ */
+async function loadIntraday(codes: string[]): Promise<Map<string, ThemePoint[]>> {
+  const today = new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
+  const rows = await db
+    .select({
+      symbol: stockSnapshots.symbol,
+      bucketKey: stockSnapshots.bucketKey,
+      payload: stockSnapshots.payload,
+    })
+    .from(stockSnapshots)
+    .where(
+      and(
+        eq(stockSnapshots.metric, 'intraday_price'),
+        inArray(stockSnapshots.symbol, codes),
+        gte(stockSnapshots.bucketKey, today),
+      ),
+    )
+    .orderBy(stockSnapshots.symbol, stockSnapshots.bucketKey);
+
+  const out = new Map<string, ThemePoint[]>();
+  for (const r of rows) {
+    const price = num(r.payload, 'price');
+    const open = num(r.payload, 'open');
+    if (!Number.isFinite(price) || price <= 0) continue;
+    let list = out.get(r.symbol);
+    if (!list) {
+      list = [];
+      // 시가는 '09:00' 자리에 둔다. 실제 체결 시각이 아니라 기준점이라는 뜻이다.
+      if (Number.isFinite(open) && open > 0) {
+        list.push({ date: `${today}T09:00+09:00`, close: open, indexed: 100 });
+      }
+      out.set(r.symbol, list);
+    }
+    const base = list[0]?.close ?? price;
+    list.push({ date: r.bucketKey, close: price, indexed: (price / base) * 100 });
+  }
+  return out;
 }
 
 export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBoard> {
@@ -176,6 +231,9 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
       and(eq(stockSnapshots.metric, 'daily_ohlcv'), inArray(stockSnapshots.symbol, codes)),
     )
     .groupBy(stockSnapshots.symbol);
+
+  const intraday = isIntradayWindow(sortDays);
+  const intradayBy = intraday ? await loadIntraday(codes) : new Map<string, ThemePoint[]>();
 
   const themeCodes = new Set(THEMES.map((t) => t.code));
   const spans = coverage
@@ -219,6 +277,29 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
   // 테마 분류는 payload가 아니라 **코드로** 찾는다. 백필 이전에 들어온 행에는
   // theme_label이 없고, ETF를 교체해도 payload는 과거를 그대로 들고 있기 때문이다.
   const build = (etf: ThemeEtf): ThemeRow => {
+    // 오늘 창은 장중 점을 쓰고, 수익률도 **오늘 시가 대비**로 낸다. 일봉 기준
+    // returnOver를 그대로 쓰면 어제 종가와 비교하게 되어 갭이 섞인다.
+    if (intraday) {
+      const pts = intradayBy.get(etf.code) ?? [];
+      const first = pts[0], last = pts[pts.length - 1];
+      const ret =
+        first && last && last !== first && first.close > 0
+          ? ((last.close - first.close) / first.close) * 100
+          : null;
+      const daily = bySymbol.get(etf.code) ?? [];
+      const dailyPts: ThemePoint[] = daily.map((p) => ({ ...p, indexed: 100 }));
+      return {
+        etf,
+        points: pts,
+        last: last?.close ?? null,
+        asOf: last?.date.slice(0, 10) ?? null,
+        ret,
+        ret1w: returnOver(dailyPts, BOARD_SORT_DAYS),
+        ret1m: returnOver(dailyPts, 30),
+        ret3m: returnOver(dailyPts, 90),
+        tradingDays: pts.length,
+      };
+    }
     const raw = bySymbol.get(etf.code) ?? [];
     const first = raw[0]?.close ?? 0;
     const points: ThemePoint[] = raw.map((p) => ({
@@ -252,11 +333,16 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
     (a, b) => (b.ret ?? -Infinity) - (a.ret ?? -Infinity),
   );
 
-  const asOf = [...themes, ...benchmarks]
-    .map((r) => r.asOf)
-    .filter((d): d is string => Boolean(d))
-    .sort()
-    .at(-1) ?? null;
+  // 기준일은 **국내 계열**에서 뽑는다. 전체 최댓값을 쓰면 국내 휴장일(한글날 등)에
+  // 미국장이 열린 ETHU 하나 때문에 헤더가 하루 앞서가고, 정작 모든 테마 줄은 그
+  // 전날 값이라 "오늘 자료"로 오해하게 된다.
+  const kr = [...themes, ...benchmarks].filter((r) => r.etf.market === 'kr');
+  const asOf =
+    (kr.length ? kr : [...themes, ...benchmarks])
+      .map((r) => r.asOf)
+      .filter((d): d is string => Boolean(d))
+      .sort()
+      .at(-1) ?? null;
 
   return { themes, benchmarks, ranked, asOf, sortDays, spanDays };
 }
