@@ -354,9 +354,9 @@ export default async function ThemeBoardPage({
           const next = BOARD_WINDOWS.find((w) => windowLocked(w, board.spanDays));
           return next ? (
             <p className="text-[11px] text-zinc-400 tabular-nums">
-              이력 {board.spanDays}일 · <strong>{next.label}</strong>은 {next.minSpan}일부터
-              열린다 ({next.minSpan - board.spanDays}일 더). 과거 일봉은 백필로 당겨올 수
-              있다 — 분봉과 달리 지난 날짜도 받아진다.
+              이력 {board.spanDays}일 · <strong>{next.label}</strong> 수익률은 {next.minSpan}일
+              치가 있어야 낼 수 있다 ({next.minSpan - board.spanDays}일 더). 과거 일봉은
+              백필로 당겨올 수 있다 — 분봉과 달리 지난 날짜도 받아진다.
             </p>
           ) : null;
         })()}

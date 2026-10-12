@@ -127,22 +127,24 @@ function returnOver(points: ThemePoint[], days: number): number | null {
  * 하루짜리는 노이즈가 지배하고 분기짜리는 "지금"이 아니라서, 그 사이를 고르게 한다.
  */
 /**
- * 창마다 **그만큼 보여줄 자격이 있는지**를 `minSpan`으로 건다.
+ * 창마다 **그 창을 실제로 계산할 수 있는지**를 `minSpan`으로 건다.
  *
- * 규칙은 "창의 절반은 차 있어야 연다"이다. 180일 창을 90일치로 그리면 선이 화면
- * 절반에서 끊기는데, 그게 "그 뒤로 안 움직였다"처럼 읽힌다. 아예 못 누르게 하고
- * **얼마나 더 모이면 열리는지**를 적어주는 쪽이 정직하다.
+ * 규칙은 간단하다: **창 길이만큼의 이력이 있어야 연다.** 365일 수익률은 365일 전
+ * 종가가 있어야 나오고, 없으면 그 칸은 `—`다.
  *
- * 과거 일봉은 더 받을 수 있지만(분봉과 달리) 그건 백필의 몫이고, 이 게이트는 "지금
- * 가진 것"만 본다. 백필을 돌리면 그 즉시 열린다.
+ * 처음엔 "창의 절반"으로 뒀다가 실제로 깨졌다. 이력 180일에서 1년 버튼이 열렸는데,
+ * 1년 수익률을 낼 수 있는 건 예전에 긴 백필을 받은 3종목뿐이라 **나머지 22줄이 전부
+ * `—`인 화면**이 됐다. 순위가 셋만 매겨지고 스물둘은 번호도 없는 목록은 보드가 아니다.
+ * 절반이 차면 "그려는 지는" 게 맞지만 **수익률 숫자는 절반으로 못 만든다** — 선과
+ * 숫자 중 숫자가 이 화면의 본체라, 숫자 기준으로 연다.
  */
 export const BOARD_WINDOWS = [
   { days: 1, label: '1일', minSpan: 0 },
-  { days: 7, label: '1주', minSpan: 0 },
-  { days: 30, label: '1개월', minSpan: 0 },
-  { days: 90, label: '3개월', minSpan: 0 },
-  { days: 180, label: '6개월', minSpan: 90 },
-  { days: 365, label: '1년', minSpan: 180 },
+  { days: 7, label: '1주', minSpan: 7 },
+  { days: 30, label: '1개월', minSpan: 30 },
+  { days: 90, label: '3개월', minSpan: 90 },
+  { days: 180, label: '6개월', minSpan: 180 },
+  { days: 365, label: '1년', minSpan: 365 },
 ] as const;
 
 export function resolveWindow(raw: string | undefined): number {
