@@ -918,16 +918,56 @@ async function main(): Promise<void> {
 }
 
 /**
- * 종료 코드를 정한다. **flush에서 분리한 이유**: flush 직후에 끝내면 부분 실패
- * 하나로 그날 신호 기록까지 잃는다. 호출부가 남은 일을 다 마친 뒤 부른다.
+ * 핵심 지표 — 이게 빠지면 그날 그 시간대를 **영영 못 메운다.**
+ *
+ * 분봉이 여기 있는 건 KIS가 당일치만 주기 때문이다. 나머지는 다음 실행이 같은 값을
+ * 다시 가져올 수 있어서 한 번 실패해도 복구된다.
+ */
+const CORE_METRICS = [
+  'intraday_price',
+  'investor_flow',
+  'investor_flow_estimate',
+  'daily_ohlcv',
+  'foreign_holding',
+  'valuation',
+  'minute_bars',
+];
+
+/** 에러 문자열은 전부 `<출처>: <메시지>` 형태로 쌓인다 (`errors.push` 호출부 참고). */
+const isCoreError = (e: string): boolean =>
+  CORE_METRICS.some((m) => e.startsWith(`${m}:`) || e.startsWith(`${m} `));
+
+/**
+ * 종료 코드를 정한다.
+ *
+ * **flush에서 분리한 이유**: flush 직후에 끝내면 부분 실패 하나로 그날 신호 기록까지
+ * 잃는다. 호출부가 남은 일을 다 마친 뒤 부른다.
+ *
+ * **부수 소스 실패로는 죽지 않는다.** 공시·뉴스·벤치마크는 다음 실행이 같은 값을 다시
+ * 가져오는데, 그 하나 때문에 exit 1이 되면 "All jobs have failed" 메일이 온다. 실제로
+ * 가장 흔한 실패가 `dart: TypeError: fetch failed` 한 줄이었고 — 미국 러너에서 한국
+ * 공공기관으로 나가는 연결이 끊긴 것 — 그때도 스냅샷 4/4와 뉴스 45건은 다 저장됐다.
+ * 매번 빨간 메일이 오면 **진짜 실패가 왔을 때 안 보게 된다.**
+ *
+ * 부수 실패도 `collector_runs.status='partial'`과 로그에는 그대로 남으므로 추적은 된다.
  */
 function finishRun(errors: string[]): void {
-  if (errors.length) {
-    console.error(`[collect] ${errors.length} error(s):`);
-    for (const e of errors) console.error('  - ' + e);
+  if (!errors.length) {
+    console.log('[collect] done');
+    return;
+  }
+  const core = errors.filter(isCoreError);
+  const aux = errors.filter((e) => !isCoreError(e));
+  if (aux.length) {
+    console.warn(`[collect] ${aux.length} 부수 소스 실패 (종료 코드에 반영 안 함):`);
+    for (const e of aux) console.warn('  ~ ' + e);
+  }
+  if (core.length) {
+    console.error(`[collect] ${core.length} 핵심 지표 실패:`);
+    for (const e of core) console.error('  - ' + e);
     process.exit(1);
   }
-  console.log('[collect] done');
+  console.log('[collect] done (부수 소스만 실패)');
 }
 
 /** 모아둔 스냅샷을 오래된 순으로 POST하고 실행 결과를 보고한다. 종료 코드는 호출부가 정한다. */

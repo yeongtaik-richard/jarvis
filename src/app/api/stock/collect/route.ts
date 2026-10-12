@@ -12,6 +12,16 @@ export const dynamic = 'force-dynamic';
 
 const REPO = process.env.GITHUB_REPO ?? 'yeongtaik-richard/jarvis';
 const WORKFLOW = 'collect-stock.yml';
+/**
+ * 장중에는 ETF 보드도 같이 깨운다.
+ *
+ * ETF 수집기는 GitHub cron에만 걸려 있었는데, 그 cron은 best-effort라 하루 일곱 번
+ * 예정 중 **한두 번만 떴다.** 하이닉스 쪽은 브리핑 루틴이 이 엔드포인트로 매시간
+ * 깨워줘서 멀쩡했고(`collect-stock.yml` 주석: "the reliable path"), ETF만 그 경로
+ * 밖에 있었던 것이다. 같은 시간대에 같이 필요한 데이터라 한 번에 깨우면 된다 —
+ * 루틴 프롬프트는 건드리지 않아도 된다.
+ */
+const ETF_WORKFLOW = 'collect-etf.yml';
 
 const Body = z.object({
   kind: z.enum(['intraday', 'close', 'premarket']).default('intraday'),
@@ -79,25 +89,42 @@ export const POST = withLog(async (req: NextRequest) => {
       return ok({ skipped: 'already_running', run_id: running.id });
     }
 
-    const res = await fetch(
-      `https://api.github.com/repos/${REPO}/actions/workflows/${WORKFLOW}/dispatches`,
-      {
+    const dispatch = async (workflow: string, inputs: Record<string, string>) =>
+      fetch(`https://api.github.com/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
         method: 'POST',
         headers: {
           accept: 'application/vnd.github+json',
           authorization: `Bearer ${token}`,
           'x-github-api-version': '2022-11-28',
         },
-        body: JSON.stringify({ ref: 'master', inputs: { run_kind: kind } }),
-      },
-    );
+        body: JSON.stringify({ ref: 'master', inputs }),
+      });
+
+    const res = await dispatch(WORKFLOW, { run_kind: kind });
     if (res.status !== 204) {
       const text = (await res.text()).slice(0, 200);
       console.error(`dispatch failed: ${res.status} ${text}`);
       return jsonError(502, 'dispatch_failed', { status: res.status, detail: text });
     }
+
+    // ETF는 **실패해도 응답을 깎지 않는다.** 이 엔드포인트의 호출자(브리핑 루틴)가
+    // 기다리는 건 하이닉스 스냅샷이라, 보드 수집이 안 떴다고 루틴을 멈추게 할 이유가 없다.
+    let etf: 'dispatched' | 'skipped' | 'failed' = 'skipped';
+    if (kind === 'intraday') {
+      try {
+        const r = await dispatch(ETF_WORKFLOW, { mode: 'intraday' });
+        etf = r.status === 204 ? 'dispatched' : 'failed';
+        if (r.status !== 204) {
+          console.error(`etf dispatch failed: ${r.status} ${(await r.text()).slice(0, 200)}`);
+        }
+      } catch (e) {
+        etf = 'failed';
+        console.error('etf dispatch error', e);
+      }
+    }
+
     // 202: 시작은 시켰고 완료는 보장하지 않는다. 호출자가 스냅샷 as_of_at을 폴링할 것.
-    return ok({ dispatched: true, kind }, 202);
+    return ok({ dispatched: true, kind, etf }, 202);
   } catch (e) {
     console.error(e);
     return jsonError(500, 'internal_error');

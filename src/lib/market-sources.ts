@@ -47,6 +47,8 @@ export async function fetchDartDisclosures(
   url.searchParams.set('end_de', kstCompact(0));
   url.searchParams.set('page_count', '100');
 
+  // 부수 소스라 **더 끈질기게** 기다린다. 기본 3회(1·3초)로는 연결이 수 초간 끊기면
+  // 그대로 실패했다 — 공시는 늦게 받아도 손해가 없으니 총 13초까지 버틴다.
   const body = await withRetry('DART list', async () => {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`DART list http ${res.status}`);
@@ -55,7 +57,7 @@ export async function fetchDartDisclosures(
       message?: string;
       list?: Record<string, string>[];
     };
-  });
+  }, { delaysMs: [1000, 3000, 9000] });
   // 013 = 조회된 데이터 없음. 에러가 아니다.
   if (body.status === '013') return [];
   if (body.status !== '000') {
@@ -93,12 +95,13 @@ export async function fetchNewsHeadlines(
   url.searchParams.set('gl', 'KR');
   url.searchParams.set('ceid', 'KR:ko');
 
+  // DART와 같은 이유로 길게 기다린다 (부수 소스).
   const xml = await withRetry('news rss', async () => {
     const res = await fetch(url, { headers: { 'user-agent': 'jarvis-collector' } });
     // 'http <코드>' 형태 — 재시도 분류기가 이 모양으로 상태 코드를 읽는다 (retry.ts).
     if (!res.ok) throw new Error(`news rss http ${res.status}`);
     return res.text();
-  });
+  }, { delaysMs: [1000, 3000, 9000] });
 
   const pick = (block: string, tag: string): string | null => {
     const m = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`).exec(block);
