@@ -27,7 +27,7 @@ export type ApiMemory = {
   importance: number;
   tags: string[];
   attributes: Record<string, unknown>;
-  source: 'gpt' | 'web' | 'sync';
+  source: 'gpt' | 'web' | 'sync' | 'claude';
   created_at: string;
   deleted_at: string | null;
 };

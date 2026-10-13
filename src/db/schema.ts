@@ -17,7 +17,7 @@ import {
 export const syncStateEnum = pgEnum('sync_state', ['pending', 'synced', 'error']);
 export const opEnum = pgEnum('op', ['create', 'update', 'delete']);
 export const timePrecisionEnum = pgEnum('time_precision', ['exact', 'date', 'month', 'unknown']);
-export const sourceEnum = pgEnum('source', ['gpt', 'web', 'sync']);
+export const sourceEnum = pgEnum('source', ['gpt', 'web', 'sync', 'claude']);
 export const kindEnum = pgEnum('kind', ['event', 'fact', 'relationship', 'trigger']);
 export const statusEnum = pgEnum('status', [
   'planned',

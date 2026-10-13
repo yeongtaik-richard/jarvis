@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const TimePrecision = z.enum(['exact', 'date', 'month', 'unknown']);
 export type TimePrecision = z.infer<typeof TimePrecision>;
 
-export const Source = z.enum(['gpt', 'web', 'sync']);
+export const Source = z.enum(['gpt', 'web', 'sync', 'claude']);
 export const Kind = z.enum(['event', 'fact', 'relationship', 'trigger']);
 export const Status = z.enum([
   'planned',
