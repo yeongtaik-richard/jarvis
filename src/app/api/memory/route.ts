@@ -1,9 +1,8 @@
-import { after, type NextRequest } from 'next/server';
+import { type NextRequest } from 'next/server';
 import { checkBearer } from '@/lib/auth';
 import { HttpError } from '@/lib/errors';
 import { fromZod, jsonError, ok } from '@/lib/http';
 import { createOrSupersede, search, toApiMemory } from '@/lib/memory-service';
-import { syncThreadToCalendar } from '@/lib/calendar-sync';
 import { withLog } from '@/lib/request-log';
 import { CreateMemoryInput, SearchQuery } from '@/lib/schemas';
 
@@ -26,7 +25,6 @@ export const POST = withLog(async (req: NextRequest) => {
 
   try {
     const created = await createOrSupersede(parsed.data);
-    after(() => syncThreadToCalendar(created.threadId));
     return ok(toApiMemory(created), 201);
   } catch (e) {
     if (e instanceof HttpError) return jsonError(e.status, e.code, e.detail);

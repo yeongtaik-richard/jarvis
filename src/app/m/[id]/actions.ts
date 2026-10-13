@@ -1,10 +1,8 @@
 'use server';
 
-import { after } from 'next/server';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { createOrSupersede, softDelete } from '@/lib/memory-service';
-import { syncThreadToCalendar } from '@/lib/calendar-sync';
 import { CreateMemoryInput } from '@/lib/schemas';
 import { localInputToIso, parseAttributes, parseTags } from '@/lib/form-parsing';
 
@@ -29,7 +27,6 @@ export async function patchMemoryAction(id: string, formData: FormData) {
   };
   const parsed = CreateMemoryInput.parse(raw);
   const created = await createOrSupersede(parsed);
-  after(() => syncThreadToCalendar(created.threadId));
   revalidatePath('/');
   revalidatePath(`/m/${id}`);
   redirect(`/m/${created.id}`);
@@ -37,7 +34,6 @@ export async function patchMemoryAction(id: string, formData: FormData) {
 
 export async function deleteMemoryAction(id: string) {
   const tombstone = await softDelete(id);
-  after(() => syncThreadToCalendar(tombstone.threadId));
   revalidatePath('/');
   redirect('/');
 }
