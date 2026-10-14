@@ -40,3 +40,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Google Maps Timeline exports (location history) — never commit
+Timeline*.json
+타임라인*.json

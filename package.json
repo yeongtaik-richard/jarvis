@@ -10,7 +10,8 @@
     "db:migrate": "dotenv -e .env.local -- tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "collect:stock": "dotenv -e .env.local -- tsx scripts/collect-stock.ts",
-    "collect:etf": "dotenv -e .env.local -- tsx scripts/collect-etf.ts"
+    "collect:etf": "dotenv -e .env.local -- tsx scripts/collect-etf.ts",
+    "timeline:import": "dotenv -e .env.local -- tsx scripts/import-timeline.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

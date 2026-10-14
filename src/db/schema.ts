@@ -300,6 +300,38 @@ export const tradeDecisions = pgTable(
   ],
 );
 
+// 구글 지도 타임라인 방문 기록 (drizzle/0013_place_visits.sql). 메모리와 별개 저장소다.
+export const places = pgTable('places', {
+  placeId: text('place_id').primaryKey(),
+  name: text('name'),
+  address: text('address'),
+  primaryType: text('primary_type'),
+  lat: doublePrecision('lat'),
+  lng: doublePrecision('lng'),
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const placeVisits = pgTable(
+  'place_visits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    placeId: text('place_id')
+      .notNull()
+      .references(() => places.placeId),
+    startTime: timestamp('start_time', { withTimezone: true }).notNull(),
+    endTime: timestamp('end_time', { withTimezone: true }).notNull(),
+    semanticType: text('semantic_type'),
+    probability: doublePrecision('probability'),
+    hierarchyLevel: smallint('hierarchy_level').notNull().default(0),
+    importedAt: timestamp('imported_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('ux_place_visits_natural').on(t.placeId, t.startTime),
+    index('ix_place_visits_start').on(sql`start_time desc`),
+  ],
+);
+
 export type EventThread = typeof eventThreads.$inferSelect;
 export type EventVersion = typeof eventVersions.$inferSelect;
 export type NewEventVersion = typeof eventVersions.$inferInsert;
@@ -319,3 +351,5 @@ export type MarketEvent = typeof marketEvents.$inferSelect;
 export type NewMarketEvent = typeof marketEvents.$inferInsert;
 export type TradeDecision = typeof tradeDecisions.$inferSelect;
 export type NewTradeDecision = typeof tradeDecisions.$inferInsert;
+export type Place = typeof places.$inferSelect;
+export type PlaceVisit = typeof placeVisits.$inferSelect;

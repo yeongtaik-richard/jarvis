@@ -29,7 +29,7 @@ info:
     그리고 방향은 결정론적 규칙 레인에서만 나온다 — AI 자유 텍스트는 규칙 신호를 인용할 수
     있을 뿐 스스로 방향을 지어내지 않으며, `validated_directional` claim_type은 거부(400)된다.
     적중률을 인용할 때는 표본 수와 기저율을 반드시 함께 말할 것.
-  version: '1.16.0'
+  version: '1.17.0'
 servers:
   - url: https://jarvis-yeongtaik.vercel.app
     description: Production
@@ -768,6 +768,56 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
       responses:
         '200': { description: 결과 목록, content: { application/json: { schema: { $ref: '#/components/schemas/SearchResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/places/visits:
+    get:
+      operationId: searchPlaceVisits
+      x-openai-isConsequential: false
+      summary: 구글 지도 타임라인 방문 기록 조회
+      description: |
+        폰에서 내보낸 구글 지도 타임라인의 방문(visit)을 조회한다. 메모리와 별개 저장소다.
+        "9월에 어디 갔지?", "MS안과 언제 갔지?" 같은 질문, 또는 메모가 비어 있는 기간을
+        채울 때 쓴다. 최신순 정렬. 장소 이름·주소는 Places API로 조회해 둔 값이다.
+        기록은 사용자가 파일을 가져온 기간만 있다 (scripts/import-timeline.ts).
+      parameters:
+        - { name: q,           in: query, description: 장소 이름·주소 부분 일치, schema: { type: string, maxLength: 200 } }
+        - { name: from,        in: query, schema: { type: string, format: date-time } }
+        - { name: to,          in: query, schema: { type: string, format: date-time } }
+        - { name: type,        in: query, description: 'home=집, work=회사, other=그 외', schema: { type: string, enum: [home, work, other] } }
+        - { name: min_minutes, in: query, description: 최소 체류 시간(분), schema: { type: integer, minimum: 0, maximum: 1440, default: 0 } }
+        - { name: limit,       in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 50 } }
+      responses:
+        '200':
+          description: 방문 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        start_time: { type: string, format: date-time }
+                        end_time: { type: string, format: date-time }
+                        minutes: { type: integer }
+                        semantic_type: { type: [string, 'null'], description: 'INFERRED_HOME | INFERRED_WORK | UNKNOWN' }
+                        hierarchy_level: { type: integer, description: '0=최상위 방문, 1=상위 방문 안의 하위 장소' }
+                        place:
+                          type: object
+                          properties:
+                            place_id: { type: string }
+                            name: { type: [string, 'null'] }
+                            address: { type: [string, 'null'] }
+                            primary_type: { type: [string, 'null'] }
+                            lat: { type: [number, 'null'] }
+                            lng: { type: [number, 'null'] }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/improvement:

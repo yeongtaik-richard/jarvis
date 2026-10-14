@@ -86,6 +86,17 @@ export const TriggersDueQuery = z.object({
 });
 export type TriggersDueQuery = z.infer<typeof TriggersDueQuery>;
 
+// 구글 지도 타임라인 방문 조회. type은 타임라인의 semanticType을 줄인 것.
+export const PlaceVisitQuery = z.object({
+  q: z.string().trim().min(1).max(200).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  type: z.enum(['home', 'work', 'other']).optional(),
+  min_minutes: z.coerce.number().int().min(0).max(1440).default(0),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
+});
+export type PlaceVisitQuery = z.infer<typeof PlaceVisitQuery>;
+
 export const CreateImprovementInput = z.object({
   observed_request: z.string().min(1).max(2000),
   missing_capability: z.string().min(1).max(2000),
