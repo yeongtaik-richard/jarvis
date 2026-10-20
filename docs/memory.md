@@ -16,8 +16,11 @@ GPT 빌더에 넣었던 Instructions 원문은 남아 있지 않아서, 이 문�
 ## 호출 방법
 
 - Base URL: `https://jarvis-yeongtaik.vercel.app`
-- 인증: `Authorization: Bearer $JARVIS_API_TOKEN` (`.env.local`에서 읽는다)
-- 토큰 값은 출력하지 않는다. `set -a; source .env.local; set +a`로 환경변수로만 쓴다.
+- 인증: `Authorization: Bearer $JARVIS_API_TOKEN`
+  - 로컬(PC): `.env.local`에 있다. `set -a; source .env.local; set +a`로 환경변수로 올려 쓴다.
+  - 클라우드 세션(claude.ai/code, 모바일 Code 탭): `.env.local`이 없다. 클라우드 환경 설정의
+    환경 변수로 `JARVIS_API_TOKEN`이 이미 들어 있으니 그대로 쓴다. 비어 있으면 사용자에게 알린다.
+- 토큰 값은 출력하지 않는다.
 - 한글 본문을 보낼 때는 JSON을 파일로 만들어 `--data-binary @file`로 보내는 게 안전하다.
 - 엔드포인트 상세는 `public/openapi.yaml`을 본다.
 
@@ -130,7 +133,8 @@ PATCH할 때 기존 version의 `source`를 그대로 복사하지 말고 `claude
 
 1. 폰: 설정 → 위치 → 위치 서비스 → 타임라인 → 타임라인 데이터 내보내기
 2. 맥 `~/Downloads`로 옮긴다 (보통 `타임라인.json`).
-3. `pnpm timeline:import ~/Downloads/타임라인.json`
+3. `pnpm timeline:import ~/Downloads/타임라인.json` (PC에서만. `DATABASE_URL`과
+   `GOOGLE_MAPS_API_KEY`가 필요해서 클라우드 세션에서는 하지 않는다)
    - 방문만 넣고 이동 경로·원시 신호·활동은 버린다. 이미 넣은 방문은 건너뛴다.
    - 처음 보는 장소만 Places API (New)로 이름을 조회한다 (`GOOGLE_MAPS_API_KEY`, 무료 한도 안).
    - 원본 파일은 위치 기록이라 레포에 넣지 않는다.
