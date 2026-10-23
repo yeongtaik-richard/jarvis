@@ -190,11 +190,13 @@ function Row({
   row,
   flows,
   days,
+  todayKst,
 }: {
   rank: number | null;
   row: ThemeRow;
   flows: { date: string; foreign: number; institution: number; individual: number }[];
   days: number;
+  todayKst: string;
 }) {
   const { etf } = row;
   const up = row.ret === null ? null : row.ret > 0;
@@ -267,7 +269,19 @@ function Row({
 
         {flows.length > 0 ? (
           <div>
-            <div className="text-zinc-500 mb-0.5">투자자별 순매수 (백만원, 최근 5일)</div>
+            {/* 날짜를 "최근 5일"로만 적으면 오늘이 빠진 게 안 보인다. 확정 수급은
+                마감 집계라 18:50 수집에 들어오고, 장중 추정은 **ETF에서 아예 안 나온다**
+                (프로브 실측: 개별 종목은 구간이 오는데 ETF는 빈 응답). 그래서 장중에는
+                오늘 수급을 보여줄 방법이 없고, 그 사실을 화면이 말해야 한다. */}
+            <div className="text-zinc-500 mb-0.5">
+              투자자별 순매수 <span className="text-zinc-400">백만원 · 마감 확정치</span>
+            </div>
+            {flows[0] && flows[0].date < todayKst && (
+              <div className="text-[11px] text-amber-700 dark:text-amber-500 mb-0.5">
+                오늘({todayKst.slice(5)})은 아직 없다 — 확정 수급은 마감 후 집계돼 18:50
+                수집에 들어온다. 장중 추정은 ETF에서 안 나온다.
+              </div>
+            )}
             <table className="w-full tabular-nums">
               <thead className="text-zinc-400">
                 <tr>
@@ -309,6 +323,7 @@ export default async function ThemeBoardPage({
   searchParams: Promise<{ d?: string }>;
 }) {
   const days = resolveWindow((await searchParams).d);
+  const todayKst = new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
   const [board, flowMap] = await Promise.all([getThemeBoard(days), getThemeFlows()]);
   const flowsOf = (code: string) => flowMap.get(code) ?? [];
 
@@ -383,6 +398,7 @@ export default async function ThemeBoardPage({
                   row={r}
                   flows={flowsOf(r.etf.code)}
                   days={days}
+                  todayKst={todayKst}
                 />
               );
             })}
