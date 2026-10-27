@@ -337,7 +337,26 @@ export default async function ThemeBoardPage({
         <div className="flex items-baseline gap-3 flex-wrap">
           <h1 className="text-xl font-semibold">테마 보드</h1>
           {board.asOf && (
-            <span className="text-xs text-zinc-500">{board.asOf} 기준</span>
+            <span className="text-xs text-zinc-500">
+              {board.asOf} 기준
+              {/* 장중 창은 "언제 받은 값인가"가 값만큼 중요하다. 버킷은 정시로 내림한
+                  값이라(13:17에 떠도 13:00) 그것만 보면 몇 분 전 것인지 알 수 없다.
+                  수집이 한 시간에 한 번이고 거르는 날도 있어서 더 그렇다. */}
+              {isIntradayWindow(days) && board.collectedAt && (
+                <>
+                  {' · '}
+                  <span className="tabular-nums">
+                    {new Date(board.collectedAt).toLocaleTimeString('ko-KR', {
+                      timeZone: 'Asia/Seoul',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: false,
+                    })}
+                  </span>{' '}
+                  수집
+                </>
+              )}
+            </span>
           )}
         </div>
 

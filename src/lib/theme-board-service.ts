@@ -72,6 +72,8 @@ export interface ThemeBoard {
   asOf: string | null;
   /** 이 보드가 정렬에 쓴 창 (일) */
   sortDays: number;
+  /** 장중 창일 때, 가장 최근 **실제 조회 시각**. 버킷 정시가 아니다. */
+  collectedAt: string | null;
   /**
    * 지금 가진 이력의 길이(달력일). **테마들의 중앙값**이다.
    *
@@ -174,12 +176,15 @@ export function windowLocked(w: { minSpan: number }, spanDays: number): boolean 
  * 장중 cron은 하루 일곱 번 예정인데 GitHub Actions가 혼잡하면 거른다. 점이 한둘뿐인
  * 날이 흔하고, 그건 선이 거칠다는 뜻이지 값이 틀렸다는 뜻은 아니다.
  */
-async function loadIntraday(codes: string[]): Promise<Map<string, ThemePoint[]>> {
+async function loadIntraday(
+  codes: string[],
+): Promise<{ points: Map<string, ThemePoint[]>; collectedAt: string | null }> {
   const today = new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
   const rows = await db
     .select({
       symbol: stockSnapshots.symbol,
       bucketKey: stockSnapshots.bucketKey,
+      asOfAt: stockSnapshots.asOfAt,
       payload: stockSnapshots.payload,
     })
     .from(stockSnapshots)
@@ -191,6 +196,14 @@ async function loadIntraday(codes: string[]): Promise<Map<string, ThemePoint[]>>
       ),
     )
     .orderBy(stockSnapshots.symbol, stockSnapshots.bucketKey);
+
+  // **버킷 시각이 아니라 실제 조회 시각**이다. 버킷은 정시로 내림한 값이라
+  // (13:17에 떠도 13:00 버킷) 그것만 보여주면 언제 받은 건지 알 수 없다.
+  let collectedAt: string | null = null;
+  for (const r of rows) {
+    const at = r.asOfAt?.toISOString() ?? null;
+    if (at && (!collectedAt || at > collectedAt)) collectedAt = at;
+  }
 
   const out = new Map<string, ThemePoint[]>();
   for (const r of rows) {
@@ -209,7 +222,7 @@ async function loadIntraday(codes: string[]): Promise<Map<string, ThemePoint[]>>
     const base = list[0]?.close ?? price;
     list.push({ date: r.bucketKey, close: price, indexed: (price / base) * 100 });
   }
-  return out;
+  return { points: out, collectedAt };
 }
 
 export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBoard> {
@@ -233,7 +246,10 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
     .groupBy(stockSnapshots.symbol);
 
   const intraday = isIntradayWindow(sortDays);
-  const intradayBy = intraday ? await loadIntraday(codes) : new Map<string, ThemePoint[]>();
+  const intradayLoad = intraday
+    ? await loadIntraday(codes)
+    : { points: new Map<string, ThemePoint[]>(), collectedAt: null };
+  const intradayBy = intradayLoad.points;
 
   const themeCodes = new Set(THEMES.map((t) => t.code));
   const spans = coverage
@@ -344,7 +360,7 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
       .sort()
       .at(-1) ?? null;
 
-  return { themes, benchmarks, ranked, asOf, sortDays, spanDays };
+  return { themes, benchmarks, ranked, asOf, sortDays, spanDays, collectedAt: intradayLoad.collectedAt };
 }
 
 /** 코드 → 테마. 화면이 payload를 뒤지지 않게 한다. */

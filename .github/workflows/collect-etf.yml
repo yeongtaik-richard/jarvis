@@ -15,6 +15,12 @@ on:
     # 장중 현재가, 평일 09~15시 KST 매시간 (00~06 UTC). 과거 분봉은 KIS가 안 주므로
     # 시간당 점은 **오늘부터 쌓는 수밖에 없다** — 지금 안 모으면 나중에도 못 모은다.
     - cron: '5 0-6 * * 1-5'
+    # 종가 포착, 15:35 KST (06:35 UTC). 위 장중 cron은 15:05에 끝나서 **실제 종가를
+    # 한 번도 못 잡는다** — 15:30 마감 뒤에 한 번 더 떠야 "오늘" 창의 마지막 점이
+    # 종가가 된다. 15:30 이후 실행은 현재 시각이 아니라 15:00 버킷에 들어가므로
+    # (`afterCloseNow`) 장이 끝난 뒤 궤적이 늘어나지도 않는다.
+    # collect-stock에 이미 같은 cron이 있고(`35 6`), ETF만 빠져 있었다.
+    - cron: '35 6 * * 1-5'
   workflow_dispatch:
     inputs:
       backfill_days:
@@ -69,10 +75,11 @@ jobs:
           JARVIS_BASE_URL: ${{ secrets.JARVIS_BASE_URL }}
           # 스케줄 실행은 입력이 없어서 0 (최근 확정일만)으로 떨어진다
           ETF_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || '0' }}
-          # 장중 cron(5 0-6)이면 intraday, 마감 cron(50 9)이면 collect.
-          # 수동 실행은 mode 입력을 그대로 따른다.
-          ETF_RUN_MODE: ${{ github.event.inputs.mode || (github.event.schedule == '5 0-6 * * 1-5' && 'intraday' || 'collect') }}
-          ETF_MODE: ${{ github.event.inputs.mode || (github.event.schedule == '5 0-6 * * 1-5' && 'intraday' || 'collect') }}
+          # 마감 cron(50 9)만 collect이고 **나머지 스케줄은 전부 intraday**다.
+          # 장중 cron을 이름으로 나열하면 새 cron을 추가할 때마다 여기도 고쳐야 하고,
+          # 실제로 15:35 종가 cron을 넣으면서 한 번 빠뜨릴 뻔했다.
+          ETF_RUN_MODE: ${{ github.event.inputs.mode || (github.event.schedule == '50 9 * * 1-5' && 'collect' || 'intraday') }}
+          ETF_MODE: ${{ github.event.inputs.mode || (github.event.schedule == '50 9 * * 1-5' && 'collect' || 'intraday') }}
           ETF_PENDING: ${{ github.event.inputs.include_pending == 'true' && '1' || '0' }}
           # probe 모드에서 해외 티커의 거래소 코드를 찾을 때만 쓴다 (쉼표 구분)
           PROBE_OVERSEAS: ${{ github.event.inputs.probe_overseas || '' }}
