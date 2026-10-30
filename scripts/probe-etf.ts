@@ -71,6 +71,14 @@ async function main(): Promise<void> {
           `프로그램=${has(q.programNetQty)} ${q.programNetQty}  ` +
           `공매도=${has(q.shortQty)}  대차잔고율=${has(q.loanBalanceRate)}`,
       );
+      // 52주·250일 고저는 **같은 응답(inquire-price)에 이미 들어 있다.** 추가 호출이
+      // 필요 없고, 창 크기를 우리가 고르지 않아도 되는 기준점이라 "전고점 대비"의
+      // 자의성을 없앤다. ETF에도 값이 오는지가 관건이다.
+      console.log(
+        `  [고저]    52주고=${has(q.w52High)} ${q.w52High} (${q.w52HighDate || '날짜없음'})  ` +
+          `52주저=${has(q.w52Low)} ${q.w52Low}  ` +
+          `250일고=${has(q.d250High)} ${q.d250High}  250일저=${has(q.d250Low)} ${q.d250Low}`,
+      );
     } catch (e) {
       console.log(`  [현재가]  ✗ ERROR ${String(e).slice(0, 120)}`);
     }
