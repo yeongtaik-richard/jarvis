@@ -226,6 +226,17 @@ async function main(): Promise<void> {
             volume: q.volume,
             amount_krw: q.amountKrw,
             amount_unit: 'krw',
+            // 52주·250일 고저. **같은 응답에 이미 들어 있어 추가 호출이 없다.**
+            // "전고점 대비"의 기준점으로 쓴다 — 스윙 고점은 창 크기나 되돌림
+            // 임계값을 우리가 골라야 하고, 한 종목에서 그 선택만 바꿔도 같은 날
+            // 답이 −5%에서 −59%까지 벌어졌다. 52주·250일은 공개된 관례라 고르는
+            // 자유도가 없다. 게다가 KIS는 우리 수집 구간 **밖의** 고점도 안다 —
+            // 조선의 52주 고가는 우리 첫 일봉보다 앞선 날짜다.
+            w52_high: q.w52High,
+            w52_low: q.w52Low,
+            w52_high_date: q.w52HighDate,
+            d250_high: q.d250High,
+            d250_low: q.d250Low,
             theme_key: etf.key,
             theme_label: etf.label,
             etf_name: etf.name,

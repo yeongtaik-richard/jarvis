@@ -63,6 +63,17 @@ export interface ThemeRow {
   ret3m: number | null;
   /** 창 안에 실제로 있는 거래일 수 — 짧은 선을 화면이 설명하는 근거 */
   tradingDays: number;
+  /**
+   * 52주·250일 고점 대비 현재 위치(%).
+   *
+   * **KIS가 주는 값을 그대로 쓴다.** 우리 일봉으로 직접 계산하면 수집 구간이
+   * 종목마다 달라(대부분 2025-12-16부터) 진짜 고점을 못 본다 — 실제로 조선의
+   * 52주 고가는 우리 첫 일봉보다 앞선 날짜다. 그리고 창이 고정이라 "직전 고점"처럼
+   * 임계값을 고르는 자유도가 없다.
+   */
+  fromW52: number | null;
+  fromD250: number | null;
+  w52HighDate: string | null;
 }
 
 export interface ThemeBoard {
@@ -225,6 +236,39 @@ async function loadIntraday(
   return { points: out, collectedAt };
 }
 
+/** 종목별 최신 52주·250일 고저. 장중 스냅샷 payload에 실려 온다. */
+async function loadExtremes(
+  codes: string[],
+): Promise<Map<string, { w52: number; d250: number; w52Date: string }>> {
+  const rows = await db
+    .select({
+      symbol: stockSnapshots.symbol,
+      bucketKey: stockSnapshots.bucketKey,
+      payload: stockSnapshots.payload,
+    })
+    .from(stockSnapshots)
+    .where(
+      and(
+        eq(stockSnapshots.metric, 'intraday_price'),
+        inArray(stockSnapshots.symbol, codes),
+      ),
+    )
+    .orderBy(stockSnapshots.symbol, stockSnapshots.bucketKey);
+  const out = new Map<string, { w52: number; d250: number; w52Date: string }>();
+  for (const r of rows) {
+    const w52 = num(r.payload, 'w52_high');
+    const d250 = num(r.payload, 'd250_high');
+    // 0이나 NaN은 "아직 저장 안 한 옛 스냅샷"이다. 덮어쓰지 않는다.
+    if (!(w52 > 0)) continue;
+    out.set(r.symbol, {
+      w52,
+      d250: d250 > 0 ? d250 : w52,
+      w52Date: String((r.payload as Record<string, unknown>)?.w52_high_date ?? ''),
+    });
+  }
+  return out;
+}
+
 export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBoard> {
   const codes = THEME_UNIVERSE.map((t) => t.code);
   const since = new Date(Date.now() + 9 * 3_600_000 - queryDays(sortDays) * 86400000)
@@ -250,6 +294,8 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
     ? await loadIntraday(codes)
     : { points: new Map<string, ThemePoint[]>(), collectedAt: null };
   const intradayBy = intradayLoad.points;
+
+  const extremes = await loadExtremes(codes);
 
   const themeCodes = new Set(THEMES.map((t) => t.code));
   const spans = coverage
@@ -290,6 +336,18 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
     bySymbol.set(r.symbol, list);
   }
 
+  const extremesOf = (code: string, last: number | null) => {
+    const e = extremes.get(code);
+    if (!e || last === null || last <= 0) {
+      return { fromW52: null, fromD250: null, w52HighDate: null };
+    }
+    return {
+      fromW52: ((last - e.w52) / e.w52) * 100,
+      fromD250: ((last - e.d250) / e.d250) * 100,
+      w52HighDate: e.w52Date || null,
+    };
+  };
+
   // 테마 분류는 payload가 아니라 **코드로** 찾는다. 백필 이전에 들어온 행에는
   // theme_label이 없고, ETF를 교체해도 payload는 과거를 그대로 들고 있기 때문이다.
   const build = (etf: ThemeEtf): ThemeRow => {
@@ -314,6 +372,7 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
         ret1m: returnOver(dailyPts, 30),
         ret3m: returnOver(dailyPts, 90),
         tradingDays: pts.length,
+        ...extremesOf(etf.code, last?.close ?? null),
       };
     }
     const raw = bySymbol.get(etf.code) ?? [];
@@ -333,6 +392,7 @@ export async function getThemeBoard(sortDays = BOARD_SORT_DAYS): Promise<ThemeBo
       ret1m: returnOver(points, 30),
       ret3m: returnOver(points, 90),
       tradingDays: points.length,
+      ...extremesOf(etf.code, last?.close ?? null),
     };
   };
 

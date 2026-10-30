@@ -257,6 +257,27 @@ function Row({
             </>
           )}
         </div>
+        {/* 전고점 대비. 52주·250일 **두 창을 같이** 둔다 — 한쪽만 보면 "1년 안에서
+            많이 빠졌다"와 "더 긴 사이클에서 많이 빠졌다"가 구분되지 않는다.
+            KIS가 주는 값이라 우리 수집 구간보다 멀리 본다. */}
+        {row.fromW52 !== null && (
+          <div className="tabular-nums">
+            <span className="text-zinc-500">52주 고점 대비 </span>
+            <span className={retClass(row.fromW52)}>{pct(row.fromW52)}</span>
+            {row.w52HighDate && row.w52HighDate.length === 8 && (
+              <span className="text-zinc-400">
+                {' ('}
+                {row.w52HighDate.slice(4, 6)}/{row.w52HighDate.slice(6, 8)})
+              </span>
+            )}
+            {row.fromD250 !== null && (
+              <>
+                <span className="text-zinc-500"> · 250일 고점 대비 </span>
+                <span className={retClass(row.fromD250)}>{pct(row.fromD250)}</span>
+              </>
+            )}
+          </div>
+        )}
         <div className="text-zinc-400">
           {etf.name} · {etf.issuer} · {etf.code}
           {etf.overseas && ` · ${etf.overseas.excd}`}
